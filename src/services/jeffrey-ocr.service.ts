@@ -6,8 +6,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaClient } from '@prisma/client';
-import fs from 'fs';
-import path from 'path';
+import { google } from 'googleapis';
 
 const prisma = new PrismaClient();
 
@@ -16,22 +15,72 @@ const anthropic = new Anthropic({
 });
 
 // ============================================================
-// Document type → which customer section it maps to
+// Google Drive client (reuse OAuth from googleDrive.service)
 // ============================================================
-const DOC_TYPE_MAPPING: Record<string, string[]> = {
-  REISEPASS: ['person'],
-  AUSWEIS: ['person'],
-  MELDEZETTEL: ['person'],
-  GEHALTSABRECHNUNG: ['person', 'haushalt'],
-  STEUERBESCHEID: ['haushalt'],
-  ARBEITSVERTRAG: ['person'],
-  GRUNDBUCHAUSZUG: ['objekt'],
-  ENERGIEAUSWEIS: ['objekt'],
-  KAUFVERTRAG: ['objekt', 'finanzplan'],
-  EXPOSE: ['objekt'],
-  KONTOAUSZUG: ['haushalt'],
-  SONSTIGES: [],
-};
+function getGoogleDrive() {
+  const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_DRIVE_REFRESH_TOKEN;
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error('Google Drive OAuth2 not configured');
+  }
+
+  const auth = new google.auth.OAuth2(clientId, clientSecret);
+  auth.setCredentials({ refresh_token: refreshToken });
+  return google.drive({ version: 'v3', auth });
+}
+
+// ============================================================
+// Download file from Google Drive as base64
+// ============================================================
+async function downloadFromGoogleDrive(googleDriveId: string): Promise<{ base64: string; mimeType: string } | null> {
+  try {
+    const drive = getGoogleDrive();
+
+    // Get file metadata
+    const meta = await drive.files.get({
+      fileId: googleDriveId,
+      fields: 'id, name, mimeType',
+    });
+
+    const fileMimeType = meta.data.mimeType || 'application/octet-stream';
+    console.log(`[Jeffrey OCR] Downloading from GDrive: ${meta.data.name} (${fileMimeType})`);
+
+    // PDF — Claude Vision can't read PDFs directly, skip
+    if (fileMimeType === 'application/pdf') {
+      console.log(`[Jeffrey OCR] PDF detected — skipping (Claude Vision needs images)`);
+      return null;
+    }
+
+    // Download file content
+    const res = await drive.files.get(
+      { fileId: googleDriveId, alt: 'media' },
+      { responseType: 'arraybuffer' }
+    );
+
+    const buffer = Buffer.from(res.data as ArrayBuffer);
+    const base64 = buffer.toString('base64');
+
+    // Map to valid Claude Vision media type
+    let visionMimeType = fileMimeType;
+    if (visionMimeType === 'image/jpg') visionMimeType = 'image/jpeg';
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(visionMimeType)) {
+      if (visionMimeType.startsWith('image/')) {
+        visionMimeType = 'image/jpeg';
+      } else {
+        console.log(`[Jeffrey OCR] Unsupported type: ${visionMimeType}`);
+        return null;
+      }
+    }
+
+    console.log(`[Jeffrey OCR] ✅ Downloaded: ${buffer.length} bytes, type: ${visionMimeType}`);
+    return { base64, mimeType: visionMimeType };
+  } catch (err: any) {
+    console.error(`[Jeffrey OCR] ❌ GDrive download failed:`, err.message);
+    return null;
+  }
+}
 
 // ============================================================
 // Main: Process a document with Claude Vision
@@ -42,7 +91,6 @@ export async function processDocumentOCR(documentId: string): Promise<{
   sectionsUpdated: string[];
   confidence: number;
 }> {
-  // 1. Load document from DB
   const doc = await prisma.document.findUnique({
     where: { id: documentId },
     include: { lead: true },
@@ -51,41 +99,38 @@ export async function processDocumentOCR(documentId: string): Promise<{
   if (!doc) throw new Error('Dokument nicht gefunden');
   if (!doc.leadId) throw new Error('Dokument ist keinem Lead zugeordnet');
 
-  console.log(`[Jeffrey OCR] Processing document: ${doc.originalFilename} for lead ${doc.leadId}`);
+  console.log(`[Jeffrey OCR] Processing: ${doc.originalFilename} (type: ${doc.type}, driveId: ${doc.googleDriveId})`);
 
-  // 2. Update status
   await prisma.document.update({
     where: { id: documentId },
     data: { ocrStatus: 'PROCESSING' },
   });
 
   try {
-    // 3. Get document content (from Google Drive URL or local)
-    let imageData: string | null = null;
-    let mediaType: string = 'image/jpeg';
+    // Download from Google Drive
+    let imageData: { base64: string; mimeType: string } | null = null;
 
-    // Try to fetch from Google Drive if URL exists
-    if (doc.googleDriveUrl) {
-      imageData = await fetchImageAsBase64(doc.googleDriveUrl);
+    if (doc.googleDriveId) {
+      imageData = await downloadFromGoogleDrive(doc.googleDriveId);
     }
 
-    // If no image data, try to read from local filesystem
-    if (!imageData && doc.filename) {
-      const localPath = path.join(process.cwd(), 'uploads', doc.filename);
-      if (fs.existsSync(localPath)) {
-        const buffer = fs.readFileSync(localPath);
-        imageData = buffer.toString('base64');
-        mediaType = doc.mimeType || 'image/jpeg';
-      }
+    if (!imageData) {
+      const reason = doc.googleDriveId ? 'Konnte nicht heruntergeladen werden (evtl. PDF)' : 'Keine Google Drive ID';
+      console.log(`[Jeffrey OCR] ⚠️ Skipping ${doc.originalFilename}: ${reason}`);
+      await prisma.document.update({
+        where: { id: documentId },
+        data: { ocrStatus: 'FAILED', ocrError: reason, ocrProcessedAt: new Date() },
+      });
+      return { documentType: doc.type, extractedFields: {}, sectionsUpdated: [], confidence: 0 };
     }
 
-    // 4. Send to Claude Vision for analysis
-    const extractionResult = await analyzeWithClaude(imageData, mediaType, doc.originalFilename, doc.type);
+    // Send to Claude Vision
+    const extractionResult = await analyzeWithClaude(imageData.base64, imageData.mimeType, doc.originalFilename, doc.type);
 
-    // 5. Save extracted data to customer fields
+    // Save to customer fields
     const sectionsUpdated = await saveExtractedData(doc.leadId, extractionResult);
 
-    // 6. Update document status
+    // Update document
     await prisma.document.update({
       where: { id: documentId },
       data: {
@@ -96,18 +141,18 @@ export async function processDocumentOCR(documentId: string): Promise<{
       },
     });
 
-    // 7. Log activity
+    // Log activity
     await prisma.activity.create({
       data: {
         leadId: doc.leadId,
         type: 'DOCUMENT_OCR_COMPLETED',
         title: `Jeffrey: ${doc.originalFilename} analysiert`,
-        description: `Dokumenttyp: ${extractionResult.documentType}. ${Object.keys(extractionResult.fields).length} Felder erkannt. Aktualisiert: ${sectionsUpdated.join(', ')}`,
-        data: { documentId, extractedFields: Object.keys(extractionResult.fields) } as any,
+        description: `Typ: ${extractionResult.documentType}. ${countFields(extractionResult.fields)} Felder erkannt. Aktualisiert: ${sectionsUpdated.join(', ') || 'keine'}`,
+        data: { documentId, sectionsUpdated, fieldCount: countFields(extractionResult.fields) } as any,
       },
     });
 
-    console.log(`[Jeffrey OCR] ✅ Done: ${extractionResult.documentType}, ${Object.keys(extractionResult.fields).length} fields, sections: ${sectionsUpdated.join(', ')}`);
+    console.log(`[Jeffrey OCR] ✅ Done: ${extractionResult.documentType}, ${countFields(extractionResult.fields)} fields, sections: ${sectionsUpdated.join(', ') || 'keine'}`);
 
     return {
       documentType: extractionResult.documentType,
@@ -120,14 +165,20 @@ export async function processDocumentOCR(documentId: string): Promise<{
     console.error(`[Jeffrey OCR] ❌ Error:`, err.message);
     await prisma.document.update({
       where: { id: documentId },
-      data: {
-        ocrStatus: 'FAILED',
-        ocrError: err.message,
-        ocrProcessedAt: new Date(),
-      },
+      data: { ocrStatus: 'FAILED', ocrError: err.message, ocrProcessedAt: new Date() },
     });
     throw err;
   }
+}
+
+function countFields(fields: Record<string, any>): number {
+  let count = 0;
+  for (const section of Object.values(fields)) {
+    if (section && typeof section === 'object') {
+      count += Object.keys(section).length;
+    }
+  }
+  return count;
 }
 
 // ============================================================
@@ -141,7 +192,7 @@ interface ExtractionResult {
 }
 
 async function analyzeWithClaude(
-  imageBase64: string | null,
+  imageBase64: string,
   mediaType: string,
   filename: string,
   existingType: string
@@ -150,7 +201,7 @@ async function analyzeWithClaude(
   const systemPrompt = `Du bist Jeffrey, ein spezialisierter OCR-Agent für die Immobilienfinanzierung in Österreich.
 Du analysierst Dokumente und extrahierst strukturierte Daten daraus.
 
-Antworte NUR mit validem JSON. Kein anderer Text.
+Antworte NUR mit validem JSON. Kein anderer Text, keine Erklärungen, kein Markdown.
 
 Extrahiere je nach Dokumenttyp die passenden Felder:
 
@@ -163,7 +214,7 @@ MELDEZETTEL → Person:
 
 GEHALTSABRECHNUNG / LOHNZETTEL → Person + Haushalt:
   Person: arbeitgeber, beruf, svNummer
-  Haushalt: nettoverdienst (Zahl), bruttogehalt (Zahl)
+  Haushalt: nettoverdienst (monatlich als Zahl)
 
 ARBEITSVERTRAG → Person:
   arbeitgeber, beruf, anstellungsverhaeltnis, beschaeftigtSeit (YYYY-MM-DD)
@@ -179,12 +230,8 @@ KAUFVERTRAG → Objekt + Finanzplan:
   Objekt: strasse, hausnummer, plz, ort, objektTyp
   Finanzplan: kaufpreis
 
-EXPOSE → Objekt:
-  objektTyp, strasse, hausnummer, plz, ort, 
-  flaecheErdgeschoss, flaecheKeller, flaecheObergeschoss, baujahr
-
-KONTOAUSZUG → Person + Haushalt:
-  Person: kontoverbindung (IBAN)
+KONTOAUSZUG → Person:
+  kontoverbindung (IBAN)
 
 JSON Format:
 {
@@ -192,92 +239,62 @@ JSON Format:
   "confidence": 0.95,
   "targetSections": ["person"],
   "fields": {
-    "person": { "vorname": "Max", "nachname": "Mustermann", ... },
-    "haushalt": { ... },
-    "finanzplan": { ... },
-    "objekt": { ... }
+    "person": { "vorname": "Max", "nachname": "Mustermann", "geburtsdatum": "1990-05-15", "geburtsort": "Wien", "geburtsland": "Österreich", "staatsbuergerschaft": "Österreich", "geschlecht": "männlich" },
+    "haushalt": {},
+    "finanzplan": {},
+    "objekt": {}
   }
 }
 
 Wichtig:
-- Nur Felder eintragen die du SICHER erkannt hast
+- Lies JEDES Detail aus dem Bild das du erkennen kannst
+- Nur Felder eintragen die du SICHER lesen kannst
 - Bei Unsicherheit das Feld weglassen
-- Zahlen als Nummern, nicht als Strings
+- Zahlen als Nummern (nicht als String)
 - Datumsfelder als "YYYY-MM-DD"
 - confidence zwischen 0.0 und 1.0
-- Leere sections weglassen`;
+- Leere sections als leeres Objekt {} lassen
+- Achte besonders auf: Namen, Geburtsdaten, Adressen, SV-Nummern, Gehälter, IBANs`;
 
-  const messages: any[] = [];
-
-  if (imageBase64) {
-    // Ensure correct media type for Claude
-    let validMediaType = mediaType;
-    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(validMediaType)) {
-      // For PDFs, we'll send as text-based description
-      if (validMediaType === 'application/pdf') {
-        messages.push({
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Analysiere dieses Dokument. Dateiname: "${filename}". Bereits klassifiziert als: ${existingType}. Das Dokument ist ein PDF das ich dir nicht als Bild zeigen kann. Bitte extrahiere basierend auf dem Dokumenttyp und dem Dateinamen was du kannst. Antworte NUR mit JSON.`,
-            },
-          ],
-        });
-      } else {
-        validMediaType = 'image/jpeg'; // fallback
-      }
-    }
-
-    if (messages.length === 0) {
-      messages.push({
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 2000,
+    system: systemPrompt,
+    messages: [
+      {
         role: 'user',
         content: [
           {
             type: 'image',
             source: {
               type: 'base64',
-              media_type: validMediaType,
+              media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
               data: imageBase64,
             },
           },
           {
             type: 'text',
-            text: `Analysiere dieses Dokument. Dateiname: "${filename}". Bereits klassifiziert als: ${existingType}. Extrahiere alle erkennbaren Felder. Antworte NUR mit JSON.`,
+            text: `Analysiere dieses Dokument. Dateiname: "${filename}". Vorklassifiziert als: ${existingType}. Extrahiere ALLE erkennbaren Felder. Antworte NUR mit JSON.`,
           },
         ],
-      });
-    }
-  } else {
-    // No image — just use filename and type
-    messages.push({
-      role: 'user',
-      content: `Ich habe ein Dokument mit dem Namen "${filename}" vom Typ "${existingType}". Ich kann dir kein Bild zeigen. Antworte mit einem leeren JSON: {"documentType": "${existingType}", "confidence": 0.1, "targetSections": [], "fields": {}}`,
-    });
-  }
-
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 2000,
-    system: systemPrompt,
-    messages,
+      },
+    ],
   });
 
-  // Parse response
   const textContent = response.content.find((c: any) => c.type === 'text');
   if (!textContent || textContent.type !== 'text') {
     throw new Error('Keine Text-Antwort von Claude');
   }
 
   let jsonStr = textContent.text.trim();
-  // Remove potential markdown code fences
   jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 
+  console.log(`[Jeffrey OCR] Claude response: ${jsonStr.substring(0, 300)}...`);
+
   try {
-    const result = JSON.parse(jsonStr) as ExtractionResult;
-    return result;
-  } catch (parseErr) {
-    console.error('[Jeffrey OCR] Failed to parse Claude response:', jsonStr);
+    return JSON.parse(jsonStr) as ExtractionResult;
+  } catch {
+    console.error('[Jeffrey OCR] Failed to parse:', jsonStr);
     throw new Error('Claude-Antwort konnte nicht geparst werden');
   }
 }
@@ -289,112 +306,95 @@ async function saveExtractedData(leadId: string, result: ExtractionResult): Prom
   const sectionsUpdated: string[] = [];
   const fields = result.fields;
 
-  // ── Person ──
   if (fields.person && Object.keys(fields.person).length > 0) {
-    const personData = sanitizePersonFields(fields.person);
-    const existing = await prisma.customerPerson.findUnique({ where: { leadId } });
-    if (existing) {
-      // Only update fields that are currently empty/null
-      const updates: Record<string, any> = {};
-      for (const [key, value] of Object.entries(personData)) {
-        if (value !== null && value !== undefined && value !== '') {
-          const currentVal = (existing as any)[key];
-          if (currentVal === null || currentVal === undefined || currentVal === '') {
-            updates[key] = value;
-          }
+    const data = sanitizePersonFields(fields.person);
+    if (Object.keys(data).length > 0) {
+      const existing = await prisma.customerPerson.findUnique({ where: { leadId } });
+      if (existing) {
+        const updates = getEmptyFieldUpdates(existing, data);
+        if (Object.keys(updates).length > 0) {
+          await prisma.customerPerson.update({ where: { leadId }, data: updates });
+          sectionsUpdated.push(`Person (${Object.keys(updates).length} Felder)`);
         }
+      } else {
+        await prisma.customerPerson.create({ data: { leadId, ...data } });
+        sectionsUpdated.push(`Person (${Object.keys(data).length} Felder)`);
       }
-      if (Object.keys(updates).length > 0) {
-        await prisma.customerPerson.update({ where: { leadId }, data: updates });
-        sectionsUpdated.push('Person');
-      }
-    } else {
-      await prisma.customerPerson.create({ data: { leadId, ...personData } });
-      sectionsUpdated.push('Person');
     }
   }
 
-  // ── Haushalt ──
   if (fields.haushalt && Object.keys(fields.haushalt).length > 0) {
-    const haushaltData = sanitizeHaushaltFields(fields.haushalt);
-    const existing = await prisma.customerHaushalt.findUnique({ where: { leadId } });
-    if (existing) {
-      const updates: Record<string, any> = {};
-      for (const [key, value] of Object.entries(haushaltData)) {
-        if (value !== null && value !== undefined && value !== '') {
-          const currentVal = (existing as any)[key];
-          if (currentVal === null || currentVal === undefined || currentVal === '') {
-            updates[key] = value;
-          }
+    const data = sanitizeHaushaltFields(fields.haushalt);
+    if (Object.keys(data).length > 0) {
+      const existing = await prisma.customerHaushalt.findUnique({ where: { leadId } });
+      if (existing) {
+        const updates = getEmptyFieldUpdates(existing, data);
+        if (Object.keys(updates).length > 0) {
+          await prisma.customerHaushalt.update({ where: { leadId }, data: updates });
+          sectionsUpdated.push(`Haushalt (${Object.keys(updates).length} Felder)`);
         }
+      } else {
+        await prisma.customerHaushalt.create({ data: { leadId, ...data } });
+        sectionsUpdated.push(`Haushalt (${Object.keys(data).length} Felder)`);
       }
-      if (Object.keys(updates).length > 0) {
-        await prisma.customerHaushalt.update({ where: { leadId }, data: updates });
-        sectionsUpdated.push('Haushalt');
-      }
-    } else {
-      await prisma.customerHaushalt.create({ data: { leadId, ...haushaltData } });
-      sectionsUpdated.push('Haushalt');
     }
   }
 
-  // ── Finanzplan ──
   if (fields.finanzplan && Object.keys(fields.finanzplan).length > 0) {
-    const fpData = sanitizeFinanzplanFields(fields.finanzplan);
-    const existing = await prisma.customerFinanzplan.findUnique({ where: { leadId } });
-    if (existing) {
-      const updates: Record<string, any> = {};
-      for (const [key, value] of Object.entries(fpData)) {
-        if (value !== null && value !== undefined && value !== '') {
-          const currentVal = (existing as any)[key];
-          if (currentVal === null || currentVal === undefined || currentVal === '') {
-            updates[key] = value;
-          }
+    const data = sanitizeFinanzplanFields(fields.finanzplan);
+    if (Object.keys(data).length > 0) {
+      const existing = await prisma.customerFinanzplan.findUnique({ where: { leadId } });
+      if (existing) {
+        const updates = getEmptyFieldUpdates(existing, data);
+        if (Object.keys(updates).length > 0) {
+          await prisma.customerFinanzplan.update({ where: { leadId }, data: updates });
+          sectionsUpdated.push(`Finanzplan (${Object.keys(updates).length} Felder)`);
         }
+      } else {
+        await prisma.customerFinanzplan.create({ data: { leadId, ...data } });
+        sectionsUpdated.push(`Finanzplan (${Object.keys(data).length} Felder)`);
       }
-      if (Object.keys(updates).length > 0) {
-        await prisma.customerFinanzplan.update({ where: { leadId }, data: updates });
-        sectionsUpdated.push('Finanzplan');
-      }
-    } else {
-      await prisma.customerFinanzplan.create({ data: { leadId, ...fpData } });
-      sectionsUpdated.push('Finanzplan');
     }
   }
 
-  // ── Objekt ──
   if (fields.objekt && Object.keys(fields.objekt).length > 0) {
-    const objektData = sanitizeObjektFields(fields.objekt);
-    // Find first existing objekt or create new
-    const existing = await prisma.customerObjekt.findFirst({ where: { leadId } });
-    if (existing) {
-      const updates: Record<string, any> = {};
-      for (const [key, value] of Object.entries(objektData)) {
-        if (value !== null && value !== undefined && value !== '') {
-          const currentVal = (existing as any)[key];
-          if (currentVal === null || currentVal === undefined || currentVal === '') {
-            updates[key] = value;
-          }
+    const data = sanitizeObjektFields(fields.objekt);
+    if (Object.keys(data).length > 0) {
+      const existing = await prisma.customerObjekt.findFirst({ where: { leadId } });
+      if (existing) {
+        const updates = getEmptyFieldUpdates(existing, data);
+        if (Object.keys(updates).length > 0) {
+          await prisma.customerObjekt.update({ where: { id: existing.id }, data: updates });
+          sectionsUpdated.push(`Objekt (${Object.keys(updates).length} Felder)`);
         }
+      } else {
+        await prisma.customerObjekt.create({ data: { leadId, ...data } });
+        sectionsUpdated.push(`Objekt (${Object.keys(data).length} Felder)`);
       }
-      if (Object.keys(updates).length > 0) {
-        await prisma.customerObjekt.update({ where: { id: existing.id }, data: updates });
-        sectionsUpdated.push('Objekt');
-      }
-    } else {
-      await prisma.customerObjekt.create({ data: { leadId, ...objektData } });
-      sectionsUpdated.push('Objekt');
     }
   }
 
   return sectionsUpdated;
 }
 
+function getEmptyFieldUpdates(existing: any, newData: Record<string, any>): Record<string, any> {
+  const updates: Record<string, any> = {};
+  for (const [key, value] of Object.entries(newData)) {
+    if (value !== null && value !== undefined && value !== '') {
+      const current = existing[key];
+      if (current === null || current === undefined || current === '') {
+        updates[key] = value;
+      }
+    }
+  }
+  return updates;
+}
+
 // ============================================================
-// Field sanitizers — ensure correct types for Prisma
+// Field sanitizers
 // ============================================================
 function sanitizePersonFields(raw: any): Record<string, any> {
-  const allowed = [
+  const stringFields = [
     'anrede', 'titel', 'vorname', 'nachname',
     'strasse', 'hausnummer', 'stiege', 'top', 'plz', 'ort', 'land',
     'mobilnummer', 'telefon', 'email',
@@ -406,32 +406,24 @@ function sanitizePersonFields(raw: any): Record<string, any> {
     'arbeitgeberStrasse', 'arbeitgeberHausnummer', 'arbeitgeberPlz', 'arbeitgeberOrt',
     'kontoverbindung', 'anmerkungen',
   ];
-
   const dateFields = ['geburtsdatum', 'wohnhaftSeit', 'beschaeftigtSeit'];
   const intFields = ['anzahlKinder', 'unterhaltsberechtigtePersonen', 'alterBeiLaufzeitende', 'vorbeschaeftigungsdauerMonate'];
 
   const result: Record<string, any> = {};
-
   for (const [key, value] of Object.entries(raw)) {
     if (value === null || value === undefined || value === '') continue;
-
-    if (allowed.includes(key)) {
-      result[key] = String(value);
-    } else if (dateFields.includes(key)) {
-      try { result[key] = new Date(String(value)); } catch {}
+    if (stringFields.includes(key)) result[key] = String(value);
+    else if (dateFields.includes(key)) {
+      try { const d = new Date(String(value)); if (!isNaN(d.getTime())) result[key] = d; } catch {}
     } else if (intFields.includes(key)) {
-      const num = parseInt(String(value));
-      if (!isNaN(num)) result[key] = num;
+      const num = parseInt(String(value)); if (!isNaN(num)) result[key] = num;
     }
   }
-
-  // Map geschlecht → anrede
   if (raw.geschlecht && !result.anrede) {
     const g = String(raw.geschlecht).toLowerCase();
     if (g.includes('m') || g.includes('männ')) result.anrede = 'Herr';
     if (g.includes('w') || g.includes('weib') || g.includes('f')) result.anrede = 'Frau';
   }
-
   return result;
 }
 
@@ -443,127 +435,63 @@ function sanitizeHaushaltFields(raw: any): Record<string, any> {
     'summeEinnahmen', 'summeAusgaben', 'sicherheitsaufschlag', 'zwischensummeHhr',
     'freiVerfuegbaresEinkommen', 'bestandskrediteRate', 'rateFoerderung', 'zumutbareKreditrate',
   ];
-  const stringFields = ['argumentationEinkuenfte', 'anmerkungWohnkosten', 'anmerkungen'];
-
   const result: Record<string, any> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (value === null || value === undefined || value === '') continue;
-    if (floatFields.includes(key)) {
-      const num = parseFloat(String(value));
-      if (!isNaN(num)) result[key] = num;
-    } else if (stringFields.includes(key)) {
-      result[key] = String(value);
-    }
+    if (floatFields.includes(key)) { const n = parseFloat(String(value)); if (!isNaN(n)) result[key] = n; }
+    else if (key === 'argumentationEinkuenfte' || key === 'anmerkungen') result[key] = String(value);
   }
-
-  // Handle nettoverdienst → store in einkommen JSON
   if (raw.nettoverdienst) {
-    result.einkommen = [{ name: 'Kreditnehmer', nettoverdienst: parseFloat(String(raw.nettoverdienst)) }];
+    const n = parseFloat(String(raw.nettoverdienst));
+    if (!isNaN(n)) result.einkommen = [{ name: 'Kreditnehmer', nettoverdienst: n }];
   }
-
   return result;
 }
 
 function sanitizeFinanzplanFields(raw: any): Record<string, any> {
   const floatFields = [
     'kaufpreis', 'grundpreis', 'aufschliessungskosten', 'baukostenKueche',
-    'renovierungskosten', 'baukostenueberschreitung', 'kaufnebenkostenProjekt',
-    'moebelSonstiges', 'summeProjektkosten',
-    'kaufvertragTreuhandProzent', 'maklergebuehrProzent',
-    'grunderwerbsteuer', 'eintragungEigentumsrecht', 'errichtungKaufvertragTreuhand',
-    'maklergebuehr', 'summeKaufnebenkosten',
-    'eigenmittelBar', 'verkaufserloese', 'abloesekapitalVersicherung', 'bausparguthaben', 'summeEigenmittel',
-    'foerderung', 'sonstigeMittel',
-    'zwischenfinanzierungNetto', 'zwischenfinanzierungBrutto',
-    'langfrFinanzierungsbedarfNetto', 'finanzierungsnebenkosten', 'langfrFinanzierungsbedarfBrutto',
+    'renovierungskosten', 'summeProjektkosten', 'grunderwerbsteuer',
+    'eigenmittelBar', 'summeEigenmittel', 'foerderung',
   ];
-  const stringFields = ['finanzierungszweck', 'objektTyp', 'anmerkungen'];
-
   const result: Record<string, any> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (value === null || value === undefined || value === '') continue;
-    if (floatFields.includes(key)) {
-      const num = parseFloat(String(value));
-      if (!isNaN(num)) result[key] = num;
-    } else if (stringFields.includes(key)) {
-      result[key] = String(value);
-    }
+    if (floatFields.includes(key)) { const n = parseFloat(String(value)); if (!isNaN(n)) result[key] = n; }
+    else if (key === 'finanzierungszweck' || key === 'objektTyp' || key === 'anmerkungen') result[key] = String(value);
   }
   return result;
 }
 
 function sanitizeObjektFields(raw: any): Record<string, any> {
-  const stringFields = [
-    'objektTyp', 'zugehoerigkeitKreditnehmer',
-    'katastralgemeinde', 'einlagezahl', 'grundstuecksnummer',
-    'strasse', 'hausnummer', 'plz', 'ort',
-    'materialanteil', 'orientierung',
-    'treuhaenderName', 'treuhaenderTelefon', 'treuhaenderFax',
-    'treuhaenderStrasse', 'treuhaenderHausnummer', 'treuhaenderPlz', 'treuhaenderOrt',
-  ];
-  const floatFields = [
-    'grundstuecksflaeche', 'energiekennzahl',
-    'flaecheKeller', 'flaecheErdgeschoss', 'flaecheObergeschoss',
-    'flaecheWeiteresOg', 'flaecheDachgeschoss',
-    'flaecheLoggia', 'flaecheBalkon', 'flaecheTerrasse',
-    'flaecheWintergarten', 'flaecheGarage', 'flaecheNebengebaeude',
-  ];
+  const stringFields = ['objektTyp', 'katastralgemeinde', 'einlagezahl', 'grundstuecksnummer', 'strasse', 'hausnummer', 'plz', 'ort'];
+  const floatFields = ['grundstuecksflaeche', 'energiekennzahl'];
   const intFields = ['baujahr'];
-  const boolFields = ['geplanteVermietung', 'objektImBau', 'fertigteilbauweise'];
-
   const result: Record<string, any> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (value === null || value === undefined || value === '') continue;
     if (stringFields.includes(key)) result[key] = String(value);
-    else if (floatFields.includes(key)) {
-      const num = parseFloat(String(value));
-      if (!isNaN(num)) result[key] = num;
-    }
-    else if (intFields.includes(key)) {
-      const num = parseInt(String(value));
-      if (!isNaN(num)) result[key] = num;
-    }
-    else if (boolFields.includes(key)) {
-      result[key] = value === true || value === 'true' || value === 'ja' || value === 'Ja';
-    }
+    else if (floatFields.includes(key)) { const n = parseFloat(String(value)); if (!isNaN(n)) result[key] = n; }
+    else if (intFields.includes(key)) { const n = parseInt(String(value)); if (!isNaN(n)) result[key] = n; }
   }
   return result;
 }
 
 // ============================================================
-// Helper: Fetch image from URL as base64
-// ============================================================
-async function fetchImageAsBase64(url: string): Promise<string | null> {
-  try {
-    // For Google Drive, convert to direct download URL
-    let fetchUrl = url;
-    const driveMatch = url.match(/\/d\/([^/]+)/);
-    if (driveMatch) {
-      fetchUrl = `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
-    }
-
-    const res = await fetch(fetchUrl);
-    if (!res.ok) return null;
-    const buffer = await res.arrayBuffer();
-    return Buffer.from(buffer).toString('base64');
-  } catch {
-    return null;
-  }
-}
-
-// ============================================================
-// Process all unprocessed documents for a lead
+// Process all documents for a lead (resets status for re-analysis)
 // ============================================================
 export async function processAllDocumentsForLead(leadId: string): Promise<{
   processed: number;
-  results: Array<{ documentId: string; filename: string; documentType: string; fieldsExtracted: number }>;
+  results: Array<{ documentId: string; filename: string; documentType: string; fieldsExtracted: number; sectionsUpdated: string[] }>;
 }> {
-  const docs = await prisma.document.findMany({
-    where: {
-      leadId,
-      ocrStatus: { in: ['PENDING', 'FAILED'] },
-    },
+  // Reset all to PENDING so they get re-analyzed
+  await prisma.document.updateMany({
+    where: { leadId },
+    data: { ocrStatus: 'PENDING' },
   });
+
+  const docs = await prisma.document.findMany({ where: { leadId } });
+  console.log(`[Jeffrey OCR] Processing ${docs.length} documents for lead ${leadId}`);
 
   const results = [];
   for (const doc of docs) {
@@ -573,10 +501,12 @@ export async function processAllDocumentsForLead(leadId: string): Promise<{
         documentId: doc.id,
         filename: doc.originalFilename,
         documentType: result.documentType,
-        fieldsExtracted: Object.keys(result.extractedFields).length,
+        fieldsExtracted: countFields(result.extractedFields),
+        sectionsUpdated: result.sectionsUpdated,
       });
     } catch (err: any) {
       console.error(`[Jeffrey OCR] Failed for ${doc.originalFilename}:`, err.message);
+      results.push({ documentId: doc.id, filename: doc.originalFilename, documentType: 'FEHLER', fieldsExtracted: 0, sectionsUpdated: [] });
     }
   }
 
