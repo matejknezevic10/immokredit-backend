@@ -1,0 +1,535 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(AGENT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Lead {
+  id                     String      @id @default(uuid())
+  firstName              String
+  lastName               String
+  email                  String
+  phone                  String
+  source                 String
+  amount                 Float?
+  message                String?
+  pipedrivePersonId      Int?        @unique
+  pipedriveDealId        Int?        @unique
+  ampelStatus            AmpelStatus @default(YELLOW)
+  temperatur             Temperatur  @default(WARM)
+  score                  Int         @default(0)
+  kaufwahrscheinlichkeit Int?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  googleDriveFolderId    String?
+  googleDriveFolderUrl   String?
+  activities             Activity[]
+  deal                   Deal?
+  documents              Document[]
+
+  // Kunde relations
+  person     CustomerPerson?
+  haushalt   CustomerHaushalt?
+  finanzplan CustomerFinanzplan?
+  objekte    CustomerObjekt[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([pipedrivePersonId])
+  @@index([pipedriveDealId])
+}
+
+model Deal {
+  id              String    @id @default(uuid())
+  leadId          String    @unique
+  pipedriveDealId Int       @unique
+  title           String
+  value           Float
+  stage           DealStage @default(NEUER_LEAD)
+  kaufzeitpunkt   String?
+  eigenmittel     String?
+  immobilieStatus String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  lead            Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([pipedriveDealId])
+  @@index([stage])
+}
+
+// ============================================================
+// KUNDE: Person
+// ============================================================
+model CustomerPerson {
+  id     String @id @default(uuid())
+  leadId String @unique
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Finanzierungsmappe
+  berater               String?
+  finanzierungsstandort String?
+
+  // Person
+  anrede   String?
+  titel    String?
+  vorname  String?
+  nachname String?
+
+  // Anschrift
+  strasse     String?
+  hausnummer  String?
+  stiege      String?
+  top         String?
+  plz         String?
+  ort         String?
+  land        String?
+
+  // Kontakt
+  mobilnummer String?
+  telefon     String?
+  email       String?
+
+  // Geburtsdaten
+  geburtsdatum       DateTime?
+  geburtsland        String?
+  geburtsort         String?
+  alterBeiLaufzeitende Int?
+
+  // Kredit bis Pensionsantritt
+  anmerkungPensionsantritt String?
+
+  // Staatsbürgerschaft
+  staatsbuergerschaft       String?
+  weitereStaatsbuergerschaft String?
+  svNummer                  String?
+  svTraeger                 String?
+
+  // Wohnverhältnis
+  wohnart       String?
+  wohnhaftSeit  DateTime?
+  steuerdomizil String?
+
+  // Familienstand
+  familienstand              String?
+  anzahlKinder               Int?
+  unterhaltsberechtigtePersonen Int?
+
+  // Ausbildung und Beruf
+  hoechsteAusbildung    String?
+  anstellungsverhaeltnis String?
+
+  // Aktuelle Beschäftigung
+  beruf                     String?
+  arbeitgeber               String?
+  beschaeftigtSeit          DateTime?
+  vorbeschaeftigungsdauerMonate Int?
+
+  // Anschrift Arbeitgeber
+  arbeitgeberStrasse    String?
+  arbeitgeberHausnummer String?
+  arbeitgeberPlz        String?
+  arbeitgeberOrt        String?
+
+  // KFZ
+  eigenesKfz Boolean?
+
+  // Konto
+  kontoverbindung String?
+  neuesKonto      String?
+  neuesKontoBeiBank String?
+
+  // Anmerkungen
+  anmerkungen String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+}
+
+// ============================================================
+// KUNDE: Haushalt
+// ============================================================
+model CustomerHaushalt {
+  id     String @id @default(uuid())
+  leadId String @unique
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Einkommen (pro Person — kann via JSON mehrere Personen speichern)
+  einkommen Json? // Array: [{ name, nettoverdienst, gehaelter14, sonstigeEinkuenfte }]
+
+  // Argumentation Einkünfte
+  argumentationEinkuenfte String?
+
+  // Zukünftige Wohnkosten
+  betriebskostenMiete Float?
+  energiekosten       Float?
+  telefonInternet     Float?
+  tvGebuehren         Float?
+  anmerkungWohnkosten String?
+
+  // Monatliche Verpflichtungen
+  transportkosten                 Float?
+  versicherungen                  Float?
+  lebenshaltungskostenKreditbeteiligte Float?
+  lebenshaltungskostenKinder      Float?
+  gesonderteAusgabenKinder        Float?
+  alimente                        Float?
+
+  // Bestandskredite (kann mehrere sein)
+  bestandskredite Json? // Array: [{ institut, urspruenglicherBetrag, aushaftung, laufzeitMonate, kreditaufnahme, monatlicheRate, wirdAbgedeckt, besichertAufObjekt }]
+
+  // Neue zusätzliche Verpflichtung
+  neueVerpflichtungen Json? // Array: [{ institut, kreditbetrag, laufzeitMonate, kreditaufnahme, monatlicheRate, besichertAufObjekt }]
+
+  // Haushaltsrechnung
+  summeEinnahmen           Float?
+  summeAusgaben            Float?
+  sicherheitsaufschlag     Float?
+  zwischensummeHhr         Float?
+
+  // Zumutbare Kreditrate
+  freiVerfuegbaresEinkommen Float?
+  bestandskrediteRate       Float?
+  rateFoerderung            Float?
+  zumutbareKreditrate       Float?
+
+  // Anmerkungen
+  anmerkungen String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+}
+
+// ============================================================
+// KUNDE: Finanzplan
+// ============================================================
+model CustomerFinanzplan {
+  id     String @id @default(uuid())
+  leadId String @unique
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Projektrahmen
+  finanzierungszweck String?
+  objektTyp          String?
+
+  // Projektkosten 1
+  kaufpreis             Float?
+  grundpreis            Float?
+  aufschliessungskosten Float?
+  baukostenKueche       Float?
+
+  // Projektkosten 2
+  renovierungskosten        Float?
+  baukostenueberschreitung  Float?
+  kaufnebenkostenProjekt    Float?
+  moebelSonstiges           Float?
+  summeProjektkosten        Float?
+
+  // Kaufnebenkosten Prozent
+  kaufvertragTreuhandProzent Float?
+  maklergebuehrProzent       Float?
+
+  // Kaufnebenkosten berechnet
+  grunderwerbsteuer           Float?
+  eintragungEigentumsrecht    Float?
+  errichtungKaufvertragTreuhand Float?
+  maklergebuehr               Float?
+  summeKaufnebenkosten        Float?
+
+  // Eigenmittel 1
+  eigenmittelBar        Float?
+  verkaufserloese       Float?
+  vorfinanzierung       Boolean?
+
+  // Eigenmittel 2
+  abloesekapitalVersicherung Float?
+  bausparguthaben            Float?
+  summeEigenmittel           Float?
+
+  // Sonstige Mittel
+  foerderung       Float?
+  sonstigeMittel   Float?
+
+  // Finanzierungsbedarf
+  zwischenfinanzierungNetto    Float?
+  finanzierungsnebenkostenZwischen Float?
+  zwischenfinanzierungBrutto   Float?
+  langfrFinanzierungsbedarfNetto  Float?
+  finanzierungsnebenkosten       Float?
+  langfrFinanzierungsbedarfBrutto Float?
+
+  // Finanzierungsnebenkosten 1
+  bearbeitungsspesen       Float?
+  kreditvermittlerprovision Float?
+  schaetzgebuehr           Float?
+  eintragungsgebuehrPfandrecht Float?
+  legalisierungsgebuehren  Float?
+
+  // Finanzierungsnebenkosten 2
+  grundbucheintragung      Float?
+  grundbuchauszug          Float?
+  finanzierungsberatungshonorar Float?
+
+  // Zwischenfinanzierung
+  zwischenKreditbetrag    Float?
+  zwischenZinssatz        Float?
+  zwischenLaufzeitMonate  Int?
+  zwischenBearbeitungsspesen Float?
+  zwischenAbdeckungDurch  String?
+  zwischenSicherheiten    String?
+
+  // Garantie für Firma
+  garantieBetrag         Float?
+  garantieTermin         DateTime?
+  garantieLaufzeitMonate Int?
+  garantieOriginalAn     String?
+
+  // Anmerkungen
+  anmerkungen String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+}
+
+// ============================================================
+// KUNDE: Objekt (kann mehrere pro Lead geben)
+// ============================================================
+model CustomerObjekt {
+  id     String @id @default(uuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Objekt
+  objektTyp         String?
+  geplanteVermietung Boolean?
+  zugehoerigkeitKreditnehmer String?
+
+  // Weitere Objektangaben
+  katastralgemeinde   String?
+  einlagezahl         String?
+  grundstuecksflaeche Float?
+  energiekennzahl     Float?
+  grundstuecksnummer  String?
+
+  // Grundstücksadresse
+  strasse    String?
+  hausnummer String?
+  plz        String?
+  ort        String?
+
+  // Baujahr
+  objektImBau Boolean?
+  baujahr     Int?
+  baubeginn   DateTime?
+  bauende     DateTime?
+
+  // Ergänzende Objektangaben
+  fertigteilbauweise Boolean?
+  materialanteil     String?
+
+  // Treuhänder
+  treuhaenderName    String?
+  treuhaenderTelefon String?
+  treuhaenderFax     String?
+
+  // Treuhänder Adresse
+  treuhaenderStrasse    String?
+  treuhaenderHausnummer String?
+  treuhaenderPlz        String?
+  treuhaenderOrt        String?
+
+  // Flächen (m²)
+  flaecheKeller     Float?
+  flaecheErdgeschoss Float?
+  flaecheObergeschoss Float?
+  flaecheWeiteresOg   Float?
+  flaecheDachgeschoss Float?
+
+  // Sonstige Flächen (m²)
+  flaecheLoggia       Float?
+  flaecheBalkon        Float?
+  flaecheTerrasse      Float?
+  flaecheWintergarten  Float?
+  flaecheGarage        Float?
+  flaecheNebengebaeude Float?
+
+  // Sanierung Außen — JSON: { bauwerk: year, dachdeckung: year, aussenfassade: year }
+  sanierungAussen Json?
+
+  // Sanierung Innen — JSON: { fenster: year, heizung: year, elektro: year, maler: year, innenputz: year }
+  sanierungInnen Json?
+
+  // Orientierung
+  orientierung String?
+
+  // Ausstattung Badezimmer — JSON: { anzahl, ausstattung, items: string[] }
+  ausstattungBadezimmer Json?
+
+  // Heizung — JSON: { heizsystem, heizungsmedium, zusaetzliche: string[] }
+  heizung Json?
+
+  // Ausstattung Außenbereich — string[]
+  ausstattungAussenbereich Json?
+
+  // Weitere Ausstattungen — string[]
+  weitereAusstattungen Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId])
+}
+
+model Document {
+  id                   String           @id @default(uuid())
+  leadId               String?
+  filename             String
+  originalFilename     String
+  type                 DocumentType
+  mimeType             String
+  size                 Int
+  googleDriveId        String?
+  googleDriveUrl       String?
+  extractedData        Json?
+  uploadedAt           DateTime         @default(now())
+  assignmentConfidence Float?
+  assignmentMethod     AssignmentMethod @default(UNASSIGNED)
+  emailFrom            String?
+  emailMessageId       String?
+  emailReceivedAt      DateTime?
+  emailSubject         String?
+  ocrConfidence        Float?
+  ocrError             String?
+  ocrProcessedAt       DateTime?
+  ocrStatus            OcrStatus        @default(PENDING)
+  lead                 Lead?            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([type])
+  @@index([ocrStatus])
+  @@index([emailFrom])
+}
+
+model EmailLog {
+  id               String    @id @default(uuid())
+  emailMessageId   String?
+  emailFrom        String?
+  emailSubject     String?
+  status           String    @default("received")
+  attachmentsCount Int       @default(0)
+  documentsCreated Int       @default(0)
+  error            String?
+  rawHeaders       Json?
+  createdAt        DateTime  @default(now())
+  completedAt      DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Activity {
+  id          String       @id @default(uuid())
+  leadId      String
+  type        ActivityType
+  title       String
+  description String?
+  data        Json?
+  createdAt   DateTime     @default(now())
+  lead        Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([createdAt])
+  @@index([type])
+}
+
+enum Role {
+  ADMIN
+  AGENT
+}
+
+enum AmpelStatus {
+  GREEN
+  YELLOW
+  RED
+}
+
+enum Temperatur {
+  HOT
+  WARM
+  COLD
+}
+
+enum DealStage {
+  NEUER_LEAD
+  QUALIFIZIERT
+  UNTERLAGEN_SAMMELN
+  UNTERLAGEN_VOLLSTAENDIG
+  BANK_ANFRAGE
+  WARTEN_AUF_ZUSAGE
+  ZUSAGE_ERHALTEN
+  ABGESCHLOSSEN
+  VERLOREN
+}
+
+enum DocumentType {
+  AUSWEIS
+  REISEPASS
+  MELDEZETTEL
+  GEHALTSABRECHNUNG
+  STEUERBESCHEID
+  ARBEITSVERTRAG
+  GRUNDBUCHAUSZUG
+  ENERGIEAUSWEIS
+  KAUFVERTRAG
+  EXPOSE
+  SONSTIGES
+  KONTOAUSZUG
+}
+
+enum OcrStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum AssignmentMethod {
+  EMAIL_MATCH
+  NAME_MATCH
+  MANUAL
+  UNASSIGNED
+}
+
+enum ActivityType {
+  LEAD_CREATED
+  DEAL_CREATED
+  DEAL_UPDATED
+  DEAL_MOVED
+  DOCUMENT_UPLOADED
+  WHATSAPP_SENT
+  WHATSAPP_RECEIVED
+  EMAIL_SENT
+  NOTE_ADDED
+  WORKFLOW_TRIGGERED
+  EMAIL_RECEIVED
+  DOCUMENT_OCR_COMPLETED
+}
