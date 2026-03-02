@@ -25,16 +25,15 @@ router.post('/ocr/:documentId', async (req, res) => {
 
 // POST /api/jeffrey/ocr-all/:leadId — Process all pending documents for a lead
 router.post('/ocr-all/:leadId', async (req, res) => {
+  console.log('[Jeffrey OCR Route] HIT - leadId:', req.params.leadId);
   try {
     const { leadId } = req.params;
+    console.log('[Jeffrey OCR Route] Calling processAllDocumentsForLead...');
     const result = await processAllDocumentsForLead(leadId);
-    res.json({
-      success: true,
-      processed: result.processed,
-      results: result.results,
-    });
+    console.log('[Jeffrey OCR Route] Success:', JSON.stringify(result));
+    res.json({ success: true, ...result });
   } catch (err: any) {
-    console.error('[Jeffrey OCR] Error:', err.message);
+    console.error('[Jeffrey OCR Route] CAUGHT ERROR:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });
