@@ -11,6 +11,33 @@ import { createCustomerFolder, uploadFileToCustomerFolder } from '../services/go
 const prisma = new PrismaClient();
 
 // ============================================================
+// Email-based serialization lock to prevent race conditions
+// When 2 attachments arrive from the same email simultaneously,
+// this ensures they are processed sequentially (not in parallel)
+// so the second one finds the lead created by the first one.
+// ============================================================
+const emailProcessingLocks = new Map<string, Promise<void>>();
+
+async function withEmailLock<T>(emailKey: string, fn: () => Promise<T>): Promise<T> {
+  // Wait for any pending request from the same sender
+  while (emailProcessingLocks.has(emailKey)) {
+    await emailProcessingLocks.get(emailKey);
+  }
+
+  // Create a lock for this request
+  let releaseLock: () => void;
+  const lockPromise = new Promise<void>(resolve => { releaseLock = resolve; });
+  emailProcessingLocks.set(emailKey, lockPromise);
+
+  try {
+    return await fn();
+  } finally {
+    emailProcessingLocks.delete(emailKey);
+    releaseLock!();
+  }
+}
+
+// ============================================================
 // Helper: Auto-create Lead from OCR data + Email
 // ============================================================
 async function autoCreateLead(
@@ -594,6 +621,21 @@ class DocumentsController {
         return res.status(400).json({ error: 'No fileBase64 provided' });
       }
 
+      // Serialize requests from the same sender to prevent race conditions
+      // (e.g. 2 attachments from same email → both would create separate leads/folders)
+      const emailKey = emailFrom || 'unknown';
+      const result = await withEmailLock(emailKey, () => this._processN8nUpload(req.body));
+
+      return res.json(result);
+    } catch (err: any) {
+      console.error('[n8n-Upload] Error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async _processN8nUpload(body: any) {
+      const { filename, mimeType, fileBase64, emailFrom, emailSubject, fileSize, emailBody, targetFolderId } = body;
+
       let fileBuffer = Buffer.from(fileBase64, 'base64');
       let actualFilename = filename || 'dokument.pdf';
       let actualMimeType = mimeType || 'application/octet-stream';
@@ -614,7 +656,7 @@ class DocumentsController {
           console.log(`[n8n-Upload] HEIC converted: ${actualFilename} (${fileBuffer.length} bytes)`);
         } catch (err: any) {
           console.error(`[n8n-Upload] HEIC conversion failed: ${err.message}`);
-          return res.status(500).json({ error: `HEIC-Konvertierung fehlgeschlagen: ${err.message}` });
+          throw new Error(`HEIC-Konvertierung fehlgeschlagen: ${err.message}`);
         }
       }
 
@@ -630,12 +672,12 @@ class DocumentsController {
 
       if (!isRelevant) {
         console.log(`[n8n-Upload] ⏭️ Skipping irrelevant: ${actualFilename} (type: ${ocrResult.documentTypeLabel})`);
-        return res.json({
+        return {
           success: true,
           skipped: true,
           reason: `Dokumenttyp "${ocrResult.documentTypeLabel}" ist nicht relevant`,
           documentType: ocrResult.documentTypeLabel,
-        });
+        };
       }
 
       // Match customer
@@ -733,7 +775,7 @@ class DocumentsController {
 
       console.log(`[n8n-Upload] ✅ ${actualFilename} → ${ocrResult.documentTypeLabel} (${customerMatch.leadName || 'nicht zugeordnet'})`);
 
-      res.json({
+      return {
         success: true,
         document: {
           id: doc.id,
@@ -743,11 +785,7 @@ class DocumentsController {
           confidence: ocrResult.overallConfidence,
           customerMatch: customerMatch.leadName,
         },
-      });
-    } catch (err: any) {
-      console.error('[n8n-Upload] Error:', err);
-      res.status(500).json({ error: err.message });
-    }
+      };
   }
 }
 
