@@ -5,6 +5,80 @@ import { berechneKennzahlen } from '../services/kennzahlen.service';
 
 const prisma = new PrismaClient();
 
+// ── Field whitelists: only these fields may be written to Prisma ──
+const PERSON_FIELDS = [
+  'berater', 'finanzierungsstandort', 'anrede', 'titel', 'vorname', 'nachname',
+  'strasse', 'hausnummer', 'stiege', 'top', 'plz', 'ort', 'land',
+  'mobilnummer', 'telefon', 'email',
+  'geburtsdatum', 'geburtsland', 'geburtsort', 'alterBeiLaufzeitende',
+  'anmerkungPensionsantritt',
+  'staatsbuergerschaft', 'weitereStaatsbuergerschaft', 'svNummer', 'svTraeger',
+  'wohnart', 'wohnhaftSeit', 'steuerdomizil',
+  'familienstand', 'anzahlKinder', 'unterhaltsberechtigtePersonen',
+  'hoechsteAusbildung', 'anstellungsverhaeltnis',
+  'beruf', 'arbeitgeber', 'beschaeftigtSeit', 'vorbeschaeftigungsdauerMonate',
+  'arbeitgeberStrasse', 'arbeitgeberHausnummer', 'arbeitgeberPlz', 'arbeitgeberOrt',
+  'eigenesKfz', 'kontoverbindung', 'neuesKonto', 'neuesKontoBeiBank', 'anmerkungen',
+];
+
+const HAUSHALT_FIELDS = [
+  'einkommen', 'argumentationEinkuenfte',
+  'betriebskostenMiete', 'energiekosten', 'telefonInternet', 'tvGebuehren', 'anmerkungWohnkosten',
+  'transportkosten', 'versicherungen', 'lebenshaltungskostenKreditbeteiligte',
+  'lebenshaltungskostenKinder', 'gesonderteAusgabenKinder', 'alimente',
+  'bestandskredite', 'neueVerpflichtungen',
+  'summeEinnahmen', 'summeAusgaben', 'sicherheitsaufschlag', 'zwischensummeHhr',
+  'freiVerfuegbaresEinkommen', 'bestandskrediteRate', 'rateFoerderung', 'zumutbareKreditrate',
+  'anmerkungen',
+];
+
+const FINANZPLAN_FIELDS = [
+  'finanzierungszweck', 'objektTyp',
+  'kaufpreis', 'grundpreis', 'aufschliessungskosten', 'baukostenKueche',
+  'renovierungskosten', 'baukostenueberschreitung', 'kaufnebenkostenProjekt', 'moebelSonstiges', 'summeProjektkosten',
+  'kaufvertragTreuhandProzent', 'maklergebuehrProzent',
+  'grunderwerbsteuer', 'eintragungEigentumsrecht', 'errichtungKaufvertragTreuhand', 'maklergebuehr', 'summeKaufnebenkosten',
+  'eigenmittelBar', 'verkaufserloese', 'vorfinanzierung',
+  'abloesekapitalVersicherung', 'bausparguthaben', 'summeEigenmittel',
+  'foerderung', 'sonstigeMittel',
+  'zwischenfinanzierungNetto', 'finanzierungsnebenkostenZwischen', 'zwischenfinanzierungBrutto',
+  'langfrFinanzierungsbedarfNetto', 'finanzierungsnebenkosten', 'langfrFinanzierungsbedarfBrutto',
+  'bearbeitungsspesen', 'kreditvermittlerprovision', 'schaetzgebuehr',
+  'eintragungsgebuehrPfandrecht', 'legalisierungsgebuehren',
+  'grundbucheintragung', 'grundbuchauszug', 'finanzierungsberatungshonorar',
+  'zwischenKreditbetrag', 'zwischenZinssatz', 'zwischenLaufzeitMonate',
+  'zwischenBearbeitungsspesen', 'zwischenAbdeckungDurch', 'zwischenSicherheiten',
+  'garantieBetrag', 'garantieTermin', 'garantieLaufzeitMonate', 'garantieOriginalAn',
+  'anmerkungen',
+];
+
+const OBJEKT_FIELDS = [
+  'objektTyp', 'geplanteVermietung', 'zugehoerigkeitKreditnehmer',
+  'katastralgemeinde', 'einlagezahl', 'grundstuecksflaeche', 'energiekennzahl', 'grundstuecksnummer',
+  'strasse', 'hausnummer', 'plz', 'ort',
+  'objektImBau', 'baujahr', 'baubeginn', 'bauende',
+  'fertigteilbauweise', 'materialanteil',
+  'treuhaenderName', 'treuhaenderTelefon', 'treuhaenderFax',
+  'treuhaenderStrasse', 'treuhaenderHausnummer', 'treuhaenderPlz', 'treuhaenderOrt',
+  'flaecheKeller', 'flaecheErdgeschoss', 'flaecheObergeschoss', 'flaecheWeiteresOg', 'flaecheDachgeschoss',
+  'flaecheLoggia', 'flaecheBalkon', 'flaecheTerrasse', 'flaecheWintergarten', 'flaecheGarage', 'flaecheNebengebaeude',
+  'sanierungAussen', 'sanierungInnen', 'orientierung',
+  'ausstattungBadezimmer', 'heizung', 'ausstattungAussenbereich', 'weitereAusstattungen',
+];
+
+/** Pick only whitelisted fields from body, converting empty strings to null */
+function pickFields(body: any, allowed: string[]): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const key of allowed) {
+    if (key in body) {
+      const val = body[key];
+      // Convert empty strings to null (prevents Prisma DateTime/Float parse errors)
+      result[key] = val === '' ? null : val;
+    }
+  }
+  return result;
+}
+
 export const kundeController = {
   // ── Get all Kunden (leads with customer data) ──
   async getAll(req: Request, res: Response) {
@@ -101,15 +175,17 @@ export const kundeController = {
   async updatePerson(req: Request, res: Response) {
     try {
       const { leadId } = req.params;
+      const data = pickFields(req.body, PERSON_FIELDS);
       const existing = await prisma.customerPerson.findUnique({ where: { leadId } });
       let person;
       if (existing) {
-        person = await prisma.customerPerson.update({ where: { leadId }, data: req.body });
+        person = await prisma.customerPerson.update({ where: { leadId }, data });
       } else {
-        person = await prisma.customerPerson.create({ data: { leadId, ...req.body } });
+        person = await prisma.customerPerson.create({ data: { leadId, ...data } });
       }
       res.json(person);
     } catch (err: any) {
+      console.error('[Kunde] updatePerson error:', err);
       res.status(500).json({ error: err.message });
     }
   },
@@ -171,8 +247,9 @@ export const kundeController = {
     try {
       const { leadId } = req.params;
       const existing = await prisma.customerHaushalt.findUnique({ where: { leadId } });
-      // Pack flat fields back into einkommen JSON
-      const data = kundeController._packEinkommen(req.body);
+      // Pack flat fields back into einkommen JSON, then whitelist
+      const packed = kundeController._packEinkommen(req.body);
+      const data = pickFields(packed, HAUSHALT_FIELDS);
       let haushalt;
       if (existing) {
         haushalt = await prisma.customerHaushalt.update({ where: { leadId }, data });
@@ -181,6 +258,7 @@ export const kundeController = {
       }
       res.json(kundeController._flattenEinkommen(haushalt));
     } catch (err: any) {
+      console.error('[Kunde] updateHaushalt error:', err);
       res.status(500).json({ error: err.message });
     }
   },
@@ -204,15 +282,17 @@ export const kundeController = {
   async updateFinanzplan(req: Request, res: Response) {
     try {
       const { leadId } = req.params;
+      const data = pickFields(req.body, FINANZPLAN_FIELDS);
       const existing = await prisma.customerFinanzplan.findUnique({ where: { leadId } });
       let fp;
       if (existing) {
-        fp = await prisma.customerFinanzplan.update({ where: { leadId }, data: req.body });
+        fp = await prisma.customerFinanzplan.update({ where: { leadId }, data });
       } else {
-        fp = await prisma.customerFinanzplan.create({ data: { leadId, ...req.body } });
+        fp = await prisma.customerFinanzplan.create({ data: { leadId, ...data } });
       }
       res.json(fp);
     } catch (err: any) {
+      console.error('[Kunde] updateFinanzplan error:', err);
       res.status(500).json({ error: err.message });
     }
   },
@@ -236,11 +316,13 @@ export const kundeController = {
   async createObjekt(req: Request, res: Response) {
     try {
       const { leadId } = req.params;
+      const data = pickFields(req.body, OBJEKT_FIELDS);
       const objekt = await prisma.customerObjekt.create({
-        data: { leadId, ...req.body },
+        data: { leadId, ...data },
       });
       res.json(objekt);
     } catch (err: any) {
+      console.error('[Kunde] createObjekt error:', err);
       res.status(500).json({ error: err.message });
     }
   },
@@ -248,12 +330,14 @@ export const kundeController = {
   async updateObjekt(req: Request, res: Response) {
     try {
       const { objektId } = req.params;
+      const data = pickFields(req.body, OBJEKT_FIELDS);
       const objekt = await prisma.customerObjekt.update({
         where: { id: objektId },
-        data: req.body,
+        data,
       });
       res.json(objekt);
     } catch (err: any) {
+      console.error('[Kunde] updateObjekt error:', err);
       res.status(500).json({ error: err.message });
     }
   },
