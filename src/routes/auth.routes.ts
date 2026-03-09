@@ -125,6 +125,8 @@ router.get('/me', async (req: Request, res: Response) => {
       name: user.name,
       email: user.email,
       role: user.role.toLowerCase(),
+      senderEmail: user.senderEmail || null,
+      senderName: user.senderName || null,
     });
   } catch (error: any) {
     res.status(401).json({ error: 'Token ungültig oder abgelaufen' });
@@ -139,17 +141,21 @@ router.put('/profile', authMiddleware, async (req: AuthRequest, res: Response) =
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Nicht authentifiziert' });
 
-    const { name } = req.body;
+    const { name, senderEmail, senderName } = req.body;
     if (!name || name.trim().length < 2) {
       return res.status(400).json({ error: 'Name muss mindestens 2 Zeichen lang sein' });
     }
 
+    const updateData: any = { name: name.trim() };
+    if (senderEmail !== undefined) updateData.senderEmail = senderEmail?.trim() || null;
+    if (senderName !== undefined) updateData.senderName = senderName?.trim() || null;
+
     const updated = await prisma.user.update({
       where: { id: userId },
-      data: { name: name.trim() },
+      data: updateData,
     });
 
-    console.log(`[Auth] Profile updated: ${updated.name} (${updated.email})`);
+    console.log(`[Auth] Profile updated: ${updated.name} (${updated.email})${updated.senderEmail ? ` [sender: ${updated.senderEmail}]` : ''}`);
 
     res.json({
       success: true,
@@ -158,6 +164,8 @@ router.put('/profile', authMiddleware, async (req: AuthRequest, res: Response) =
         name: updated.name,
         email: updated.email,
         role: updated.role.toLowerCase(),
+        senderEmail: updated.senderEmail || null,
+        senderName: updated.senderName || null,
       },
     });
   } catch (error: any) {

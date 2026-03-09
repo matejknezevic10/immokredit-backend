@@ -13,6 +13,8 @@ model User {
   name              String
   password          String
   role              Role     @default(AGENT)
+  senderEmail       String?  // Absender-E-Mail für ausgehende Mails (z.B. Office@tdfinance.at)
+  senderName        String?  // Absender-Name (z.B. "Daniel Tunjic - TDFinance")
   notificationPrefs Json?    // { neuerLead, dokumentHochgeladen, emailGeoeffnet, pipelineAenderung, tagesReport, wochenReport, systemUpdates }
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

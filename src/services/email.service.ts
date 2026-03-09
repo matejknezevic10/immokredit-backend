@@ -66,6 +66,8 @@ export interface SendEmailParams {
   bodyHtml: string;
   emailType?: string;  // reminder, notification, custom
   sentBy?: string;     // User name
+  fromEmail?: string;  // Per-user sender email (z.B. Office@tdfinance.at)
+  fromName?: string;   // Per-user sender name (z.B. "Daniel Tunjic - TDFinance")
 }
 
 export interface SendEmailResult {
@@ -75,7 +77,7 @@ export interface SendEmailResult {
 }
 
 export async function sendTrackedEmail(params: SendEmailParams): Promise<SendEmailResult> {
-  const { leadId, to, subject, bodyHtml, emailType = 'reminder', sentBy } = params;
+  const { leadId, to, subject, bodyHtml, emailType = 'reminder', sentBy, fromEmail: userFromEmail, fromName: userFromName } = params;
 
   // 1. Create tracking record first (to get ID for pixel)
   const tracking = await prisma.emailTracking.create({
@@ -93,11 +95,11 @@ export async function sendTrackedEmail(params: SendEmailParams): Promise<SendEma
   // 2. Inject tracking pixel into HTML
   const htmlWithPixel = injectTrackingPixel(bodyHtml, tracking.id);
 
-  // 3. Send via SendGrid
+  // 3. Send via SendGrid (per-user sender falls back to env defaults)
   try {
     const sg = getSendGrid();
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'info@immo-kredit.net';
-    const fromName = process.env.SENDGRID_FROM_NAME || 'ImmoKredit';
+    const fromEmail = userFromEmail || process.env.SENDGRID_FROM_EMAIL || 'info@immo-kredit.net';
+    const fromName = userFromName || process.env.SENDGRID_FROM_NAME || 'ImmoKredit';
 
     const [response] = await sg.send({
       to,
