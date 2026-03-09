@@ -1,6 +1,7 @@
 // src/controllers/kunde.controller.ts
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { berechneKennzahlen } from '../services/kennzahlen.service';
 
 const prisma = new PrismaClient();
 
@@ -224,6 +225,23 @@ export const kundeController = {
       await prisma.customerObjekt.delete({ where: { id: objektId } });
       res.json({ success: true });
     } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  // ══════════════════════════════════════════
+  // KENNZAHLEN (DSTI, LTV, Immowert)
+  // ══════════════════════════════════════════
+  async getKennzahlen(req: Request, res: Response) {
+    try {
+      const { leadId } = req.params;
+      const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+      if (!lead) return res.status(404).json({ error: 'Lead nicht gefunden' });
+
+      const kennzahlen = await berechneKennzahlen(leadId);
+      res.json(kennzahlen);
+    } catch (err: any) {
+      console.error('[Kunde] getKennzahlen error:', err);
       res.status(500).json({ error: err.message });
     }
   },

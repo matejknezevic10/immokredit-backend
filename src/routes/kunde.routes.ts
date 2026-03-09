@@ -22,6 +22,9 @@ router.put('/:leadId/haushalt', kundeController.updateHaushalt);
 router.get('/:leadId/finanzplan', kundeController.getFinanzplan);
 router.put('/:leadId/finanzplan', kundeController.updateFinanzplan);
 
+// Kennzahlen (DSTI, LTV, Immowert)
+router.get('/:leadId/kennzahlen', kundeController.getKennzahlen);
+
 // Objekt (multiple)
 router.get('/:leadId/objekte', kundeController.getObjekte);
 router.post('/:leadId/objekte', kundeController.createObjekt);

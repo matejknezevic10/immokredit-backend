@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
-import authRoutes from './routes/auth.routes';
+import authRoutes, { ensureUsersExist } from './routes/auth.routes';
 import leadsRoutes from './routes/leads.routes';
 import dealsRoutes from './routes/deals.routes';
 import statsRoutes from './routes/stats.routes';
@@ -16,6 +16,11 @@ import { leadsController } from './controllers/leads.controller';
 import { processVoiceMemo } from './services/voicememo.service';
 import kundeRoutes from './routes/kunde.routes';
 import jeffreyOcrRoutes from './routes/jeffrey-ocr.routes';
+import trackingRoutes from './routes/tracking.routes';
+import emailRoutes from './routes/email.routes';
+import voiceAgentRoutes from './routes/voiceAgent.routes';
+import signatureRoutes from './routes/signature.routes';
+import secureLinkRoutes from './routes/secureLink.routes';
 
 // Load environment variables
 dotenv.config();
@@ -70,6 +75,15 @@ app.post('/api/leads/onepage-funnel', (req, res) => leadsController.onepageFunne
 // Jeffrey checklist/reminder routes (public for now)
 app.use('/api/jeffrey', jeffreyRoutes);
 
+// Email tracking pixel (public — loaded by recipient's email client)
+app.use('/api/tracking', trackingRoutes);
+
+// Voice Agent routes (webhook is public, /call requires auth — handled in router)
+app.use('/api/voice-agent', voiceAgentRoutes);
+
+// Secure document link (validate + documents public, /create requires auth — handled in router)
+app.use('/api/secure-link', secureLinkRoutes);
+
 // ── Protected API Routes (require JWT) ──
 
 // Voice Memo — requires auth (user must be logged in)
@@ -94,6 +108,8 @@ app.use('/api/pipedrive', authMiddleware, pipedriveRoutes);
 app.use('/api/chat', authMiddleware, chatRoutes);
 app.use('/api/kunde', authMiddleware, kundeRoutes);
 app.use('/api/jeffrey-ocr', authMiddleware, jeffreyOcrRoutes);
+app.use('/api/email', authMiddleware, emailRoutes);
+app.use('/api/signature', authMiddleware, signatureRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -113,7 +129,15 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  // Ensure seed users exist in database
+  try {
+    await ensureUsersExist();
+    console.log('[Auth] User seeding complete');
+  } catch (err: any) {
+    console.error('[Auth] User seeding failed:', err.message);
+  }
+
   console.log(`
 🚀 ImmoKredit Backend API Server
 

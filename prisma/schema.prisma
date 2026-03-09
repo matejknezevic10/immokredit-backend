@@ -8,13 +8,14 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String
-  password  String
-  role      Role     @default(AGENT)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String   @id @default(uuid())
+  email             String   @unique
+  name              String
+  password          String
+  role              Role     @default(AGENT)
+  notificationPrefs Json?    // { neuerLead, dokumentHochgeladen, emailGeoeffnet, pipelineAenderung, tagesReport, wochenReport, systemUpdates }
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model Lead {
@@ -45,6 +46,7 @@ model Lead {
   haushalt   CustomerHaushalt?
   finanzplan CustomerFinanzplan?
   objekte    CustomerObjekt[]
+  emailTracking EmailTracking[]
 
   @@index([email])
   @@index([phone])
@@ -444,6 +446,31 @@ model EmailLog {
 
   @@index([status])
   @@index([createdAt])
+}
+
+// ============================================================
+// Email Tracking: Outgoing emails with open tracking
+// ============================================================
+model EmailTracking {
+  id           String    @id @default(uuid())
+  leadId       String
+  lead         Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  to           String
+  subject      String
+  bodyHtml     String
+  emailType    String    @default("reminder") // reminder, notification, custom
+  sentBy       String?   // User who triggered the send
+  sentAt       DateTime  @default(now())
+  openedAt     DateTime? // First open
+  openCount    Int       @default(0)
+  lastOpenedAt DateTime?
+  userAgent    String?   // User agent from first open
+  sendgridMessageId String?
+  status       String    @default("sent") // sent, opened, failed
+
+  @@index([leadId])
+  @@index([status])
+  @@index([sentAt])
 }
 
 model Activity {

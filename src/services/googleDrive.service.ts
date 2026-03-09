@@ -222,7 +222,30 @@ export async function uploadFileToCustomerFolder(
 ): Promise<UploadResult> {
   const drive = getDrive();
 
-  // ── Convert images to PDF ──
+  // ── Upload raw/original file to "Archiv" subfolder ──
+  try {
+    const archivFolderId = await getOrCreateSubfolderInParent(drive, targetFolderId, 'Archiv');
+    const rawStream = new Readable();
+    rawStream.push(fileBuffer);
+    rawStream.push(null);
+
+    await drive.files.create({
+      requestBody: {
+        name: filename,
+        parents: [archivFolderId],
+      },
+      media: {
+        mimeType,
+        body: rawStream,
+      },
+      fields: 'id',
+    });
+    console.log(`[GDrive] Archiv: ${filename} → Archiv subfolder`);
+  } catch (err: any) {
+    console.error(`[GDrive] ⚠️ Archiv upload failed (non-fatal): ${err.message}`);
+  }
+
+  // ── Convert images to PDF for the main folder ──
   let uploadBuffer = fileBuffer;
   let uploadMimeType = mimeType;
   let uploadFilename = filename;
@@ -235,7 +258,7 @@ export async function uploadFileToCustomerFolder(
       uploadMimeType = pdfMimeType;
       // Change extension to .pdf
       uploadFilename = filename.replace(/\.(jpg|jpeg|png|gif|webp|bmp|tiff?)$/i, '.pdf');
-      console.log(`[GDrive] ✅ Converted: ${filename} → ${uploadFilename} (${pdfBuffer.length} bytes)`);
+      console.log(`[GDrive] Converted: ${filename} → ${uploadFilename} (${pdfBuffer.length} bytes)`);
     } catch (err: any) {
       console.error(`[GDrive] ⚠️ Image→PDF conversion failed, uploading original: ${err.message}`);
       // Fallback: upload original image if conversion fails
@@ -267,7 +290,7 @@ export async function uploadFileToCustomerFolder(
   // Build filename: "1. Matej Knežević Lohnzettel.pdf"
   const ext = uploadFilename.includes('.') ? uploadFilename.substring(uploadFilename.lastIndexOf('.')) : '';
   let uploadName: string;
-  
+
   if (customerName && documentType) {
     uploadName = `${nextFileNumber}. ${customerName} ${documentType}${ext}`;
   } else if (customerName) {
@@ -297,8 +320,41 @@ export async function uploadFileToCustomerFolder(
   const fileId = response.data.id!;
   const webViewLink = response.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
 
-  console.log(`[GDrive] ✅ Uploaded: ${uploadName} (${fileId})`);
+  console.log(`[GDrive] Uploaded: ${uploadName} (${fileId})`);
   return { fileId, webViewLink };
+}
+
+// ============================================================
+// Helper: Find or create a subfolder inside a parent folder
+// ============================================================
+async function getOrCreateSubfolderInParent(
+  drive: any,
+  parentFolderId: string,
+  subfolderName: string,
+): Promise<string> {
+  // Check if subfolder already exists
+  const existing = await drive.files.list({
+    q: `'${parentFolderId}' in parents and name='${subfolderName.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    fields: 'files(id, name)',
+    pageSize: 1,
+  });
+
+  if (existing.data.files && existing.data.files.length > 0) {
+    return existing.data.files[0].id!;
+  }
+
+  // Create subfolder
+  const created = await drive.files.create({
+    requestBody: {
+      name: subfolderName,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentFolderId],
+    },
+    fields: 'id',
+  });
+
+  console.log(`[GDrive] Created subfolder: ${subfolderName} in ${parentFolderId}`);
+  return created.data.id!;
 }
 
 // ============================================================
