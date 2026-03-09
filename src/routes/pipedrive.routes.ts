@@ -137,6 +137,7 @@ router.get('/deals', async (req: Request, res: Response) => {
         where: { pipedriveDealId: { in: pipedriveDealIds } },
         select: { pipedriveDealId: true, leadId: true },
       });
+      console.log(`[Pipedrive] Enrichment: ${pipedriveDealIds.length} pipeline deals, ${localDeals.length} matched in local DB. IDs: ${pipedriveDealIds.join(', ')}`);
       const leadIdMap = new Map(localDeals.map(d => [d.pipedriveDealId, d.leadId]));
       deals = deals.map((d: any) => ({ ...d, leadId: leadIdMap.get(d.pipedriveDealId) || null }));
     }
