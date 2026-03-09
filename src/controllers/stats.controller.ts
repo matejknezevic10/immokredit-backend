@@ -230,6 +230,46 @@ export class StatsController {
         .filter((k) => k.missingCount > 0)
         .sort((a, b) => b.missingCount - a.missingCount);
 
+      // Top Leads nach Score (alle Leads, nicht nur eigene Kunden)
+      const topLeads = await prisma.lead.findMany({
+        where: { isKunde: false, score: { gt: 0 } },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          score: true,
+          ampelStatus: true,
+          temperatur: true,
+          source: true,
+          amount: true,
+          createdAt: true,
+        },
+        orderBy: { score: 'desc' },
+        take: 5,
+      });
+
+      // Lead-Qualität: Verteilung über ALLE Leads (nicht nur Kunden)
+      const allLeads = await prisma.lead.findMany({
+        where: { isKunde: false },
+        select: { score: true, ampelStatus: true, temperatur: true },
+      });
+      const leadQualitaet = {
+        total: allLeads.length,
+        avgScore: allLeads.length > 0 ? Math.round(allLeads.reduce((sum, l) => sum + l.score, 0) / allLeads.length) : 0,
+        ampel: {
+          green: allLeads.filter(l => l.ampelStatus === 'GREEN').length,
+          yellow: allLeads.filter(l => l.ampelStatus === 'YELLOW').length,
+          red: allLeads.filter(l => l.ampelStatus === 'RED').length,
+        },
+        temperatur: {
+          hot: allLeads.filter(l => l.temperatur === 'HOT').length,
+          warm: allLeads.filter(l => l.temperatur === 'WARM').length,
+          cold: allLeads.filter(l => l.temperatur === 'COLD').length,
+        },
+      };
+
       // Pipedrive Deals für diesen User laden
       let meineDeals: any[] = [];
       if (PIPEDRIVE_API_TOKEN) {
@@ -283,6 +323,8 @@ export class StatsController {
         meineAktivitaeten,
         aktivitaetenHeute,
         meineDeals,
+        topLeads,
+        leadQualitaet,
       });
     } catch (error: any) {
       console.error('StatsController.getMyDashboard error:', error);
