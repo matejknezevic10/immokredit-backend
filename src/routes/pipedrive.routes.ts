@@ -130,7 +130,7 @@ router.get('/deals', async (req: Request, res: Response) => {
       };
     });
 
-    // Enrich with local leadId from DB — 3 strategies
+    // Enrich with local leadId from DB — try matching, then auto-create for unmatched
     const pipedriveDealIds = deals.map((d: any) => d.pipedriveDealId).filter(Boolean);
     if (pipedriveDealIds.length > 0) {
       const leadIdMap = new Map<number, string>();
@@ -154,23 +154,61 @@ router.get('/deals', async (req: Request, res: Response) => {
         }
       }
 
-      // Strategy 3: Match via person email → Lead.email (for deals created directly in Pipedrive)
-      const unmatchedDeals = deals.filter((d: any) => !leadIdMap.has(d.pipedriveDealId) && d.personEmail);
-      if (unmatchedDeals.length > 0) {
-        const emails = unmatchedDeals.map((d: any) => d.personEmail).filter(Boolean);
+      // Strategy 3: Match via person email → Lead.email
+      const unmatchedDeals2 = deals.filter((d: any) => !leadIdMap.has(d.pipedriveDealId) && d.personEmail);
+      if (unmatchedDeals2.length > 0) {
+        const emails = unmatchedDeals2.map((d: any) => d.personEmail).filter(Boolean);
         const emailLeads = await prisma.lead.findMany({
           where: { email: { in: emails } },
           select: { email: true, id: true },
         });
         const emailMap = new Map(emailLeads.map(l => [l.email.toLowerCase(), l.id]));
-        for (const deal of unmatchedDeals) {
+        for (const deal of unmatchedDeals2) {
           const leadId = emailMap.get(deal.personEmail?.toLowerCase());
           if (leadId) leadIdMap.set(deal.pipedriveDealId, leadId);
         }
       }
 
-      const matchedEmails = unmatchedDeals.filter((d: any) => leadIdMap.has(d.pipedriveDealId)).length;
-      console.log(`[Pipedrive] Enrichment: ${pipedriveDealIds.length} pipeline deals → ${leadIdMap.size} matched (Deal: ${localDeals.length}, Lead: ${leadIdMap.size - localDeals.length - matchedEmails}, Email: ${matchedEmails})`);
+      // Strategy 4: Auto-create local Lead+Deal for remaining unmatched Pipedrive deals
+      const stillUnmatched = deals.filter((d: any) => !leadIdMap.has(d.pipedriveDealId) && d.personName);
+      for (const deal of stillUnmatched) {
+        try {
+          const nameParts = (deal.personName || '').split(' ');
+          const firstName = nameParts[0] || 'Unbekannt';
+          const lastName = nameParts.slice(1).join(' ') || '';
+          const stageFromPd = deal.stage || 'NEUER_LEAD';
+
+          const newLead = await prisma.lead.create({
+            data: {
+              firstName,
+              lastName,
+              email: deal.personEmail || `pd-${deal.pipedriveDealId}@pipedrive.local`,
+              phone: deal.personPhone || '',
+              source: 'Pipedrive',
+              amount: deal.value || 0,
+              pipedriveDealId: deal.pipedriveDealId,
+              ampelStatus: 'YELLOW',
+              temperatur: 'WARM',
+              score: 0,
+              deal: {
+                create: {
+                  pipedriveDealId: deal.pipedriveDealId,
+                  title: deal.title || `${firstName} ${lastName}`,
+                  value: deal.value || 0,
+                  stage: stageFromPd as any,
+                },
+              },
+            },
+          });
+          leadIdMap.set(deal.pipedriveDealId, newLead.id);
+          console.log(`[Pipedrive] Auto-created Lead+Deal for PD deal ${deal.pipedriveDealId} (${deal.personName})`);
+        } catch (autoErr: any) {
+          // Might fail if email already exists (unique constraint) — non-critical
+          console.warn(`[Pipedrive] Auto-create failed for deal ${deal.pipedriveDealId}: ${autoErr.message}`);
+        }
+      }
+
+      console.log(`[Pipedrive] Enrichment: ${pipedriveDealIds.length} pipeline deals → ${leadIdMap.size} matched/created`);
       deals = deals.map((d: any) => ({ ...d, leadId: leadIdMap.get(d.pipedriveDealId) || null }));
     }
 
