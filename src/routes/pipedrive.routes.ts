@@ -130,15 +130,47 @@ router.get('/deals', async (req: Request, res: Response) => {
       };
     });
 
-    // Enrich with local leadId from DB
+    // Enrich with local leadId from DB — 3 strategies
     const pipedriveDealIds = deals.map((d: any) => d.pipedriveDealId).filter(Boolean);
     if (pipedriveDealIds.length > 0) {
+      const leadIdMap = new Map<number, string>();
+
+      // Strategy 1: Match via Deal.pipedriveDealId → Deal.leadId
       const localDeals = await prisma.deal.findMany({
         where: { pipedriveDealId: { in: pipedriveDealIds } },
         select: { pipedriveDealId: true, leadId: true },
       });
-      console.log(`[Pipedrive] Enrichment: ${pipedriveDealIds.length} pipeline deals, ${localDeals.length} matched in local DB. IDs: ${pipedriveDealIds.join(', ')}`);
-      const leadIdMap = new Map(localDeals.map(d => [d.pipedriveDealId, d.leadId]));
+      for (const d of localDeals) leadIdMap.set(d.pipedriveDealId, d.leadId);
+
+      // Strategy 2: Match via Lead.pipedriveDealId → Lead.id
+      const unmatchedIds1 = pipedriveDealIds.filter((id: number) => !leadIdMap.has(id));
+      if (unmatchedIds1.length > 0) {
+        const localLeads = await prisma.lead.findMany({
+          where: { pipedriveDealId: { in: unmatchedIds1 } },
+          select: { pipedriveDealId: true, id: true },
+        });
+        for (const lead of localLeads) {
+          if (lead.pipedriveDealId) leadIdMap.set(lead.pipedriveDealId, lead.id);
+        }
+      }
+
+      // Strategy 3: Match via person email → Lead.email (for deals created directly in Pipedrive)
+      const unmatchedDeals = deals.filter((d: any) => !leadIdMap.has(d.pipedriveDealId) && d.personEmail);
+      if (unmatchedDeals.length > 0) {
+        const emails = unmatchedDeals.map((d: any) => d.personEmail).filter(Boolean);
+        const emailLeads = await prisma.lead.findMany({
+          where: { email: { in: emails } },
+          select: { email: true, id: true },
+        });
+        const emailMap = new Map(emailLeads.map(l => [l.email.toLowerCase(), l.id]));
+        for (const deal of unmatchedDeals) {
+          const leadId = emailMap.get(deal.personEmail?.toLowerCase());
+          if (leadId) leadIdMap.set(deal.pipedriveDealId, leadId);
+        }
+      }
+
+      const matchedEmails = unmatchedDeals.filter((d: any) => leadIdMap.has(d.pipedriveDealId)).length;
+      console.log(`[Pipedrive] Enrichment: ${pipedriveDealIds.length} pipeline deals → ${leadIdMap.size} matched (Deal: ${localDeals.length}, Lead: ${leadIdMap.size - localDeals.length - matchedEmails}, Email: ${matchedEmails})`);
       deals = deals.map((d: any) => ({ ...d, leadId: leadIdMap.get(d.pipedriveDealId) || null }));
     }
 
@@ -190,15 +222,25 @@ router.put('/deals/:id/stage', async (req: Request, res: Response) => {
     const data = await response.json() as any;
     if (!data.success) throw new Error(data.error || 'Failed to update deal stage');
 
-    // Sync local DB deal stage
+    // Sync local DB deal stage — try Deal first, then Lead fallback
     try {
       const stages = await getStages();
       const targetStage = stages.find((s: any) => s.id === stageId);
       if (targetStage) {
         const localStage = mapStage(targetStage.name, targetStage.order_nr);
-        const localDeal = await prisma.deal.findUnique({
+        let localDeal = await prisma.deal.findUnique({
           where: { pipedriveDealId: parseInt(id) },
         });
+
+        // Fallback: find via Lead.pipedriveDealId
+        if (!localDeal) {
+          const lead = await prisma.lead.findFirst({
+            where: { pipedriveDealId: parseInt(id) },
+            include: { deal: true },
+          });
+          if (lead?.deal) localDeal = lead.deal;
+        }
+
         if (localDeal) {
           await prisma.deal.update({
             where: { id: localDeal.id },
@@ -210,7 +252,7 @@ router.put('/deals/:id/stage', async (req: Request, res: Response) => {
           if (localStage === 'ABGESCHLOSSEN') {
             createSecureDocumentLink({ leadId: localDeal.leadId }).then(result => {
               if (result.success) {
-                console.log(`[Pipedrive] Auto-sent secure link for lead ${localDeal.leadId}`);
+                console.log(`[Pipedrive] Auto-sent secure link for lead ${localDeal!.leadId}`);
               } else {
                 console.warn(`[Pipedrive] Secure link failed: ${result.error}`);
               }
