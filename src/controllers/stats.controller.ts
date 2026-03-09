@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import { leadsService } from '../services/leads.service';
 import { PrismaClient } from '@prisma/client';
+import { AuthRequest } from '../middleware/auth.middleware';
 
 const prisma = new PrismaClient();
 
@@ -55,6 +56,148 @@ export class StatsController {
       });
     } catch (error: any) {
       console.error('StatsController.getStats error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  // GET /api/stats/my-dashboard - Personalisiertes Dashboard
+  async getMyDashboard(req: Request, res: Response) {
+    try {
+      const userId = (req as AuthRequest).user?.id;
+      const userName = (req as AuthRequest).user?.name || 'Benutzer';
+      if (!userId) return res.status(401).json({ error: 'Nicht authentifiziert' });
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const [
+        meineKundenRaw,
+        verfuegbareLeadsCount,
+        neueLeadsHeute,
+        letzteLeads,
+        meineAktivitaeten,
+        aktivitaetenHeute,
+      ] = await Promise.all([
+        // 1) Alle eigenen Kunden mit Completion-Info
+        prisma.lead.findMany({
+          where: { isKunde: true, assignedToId: userId },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            ampelStatus: true,
+            temperatur: true,
+            person: { select: { id: true } },
+            haushalt: { select: { id: true } },
+            finanzplan: { select: { id: true } },
+            objekte: { select: { id: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+        }),
+
+        // 2) Verfügbare Leads (nicht konvertiert)
+        prisma.lead.count({ where: { isKunde: false } }),
+
+        // 3) Neue Leads heute
+        prisma.lead.count({ where: { isKunde: false, createdAt: { gte: today } } }),
+
+        // 4) Letzte 5 Leads für Preview
+        prisma.lead.findMany({
+          where: { isKunde: false },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            source: true,
+            temperatur: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+        }),
+
+        // 5) Letzte 10 Activities auf MEINEN Kunden
+        prisma.activity.findMany({
+          where: {
+            lead: { isKunde: true, assignedToId: userId },
+          },
+          include: {
+            lead: { select: { id: true, firstName: true, lastName: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+        }),
+
+        // 6) Aktivitäten heute auf meinen Kunden
+        prisma.activity.count({
+          where: {
+            createdAt: { gte: today },
+            lead: { isKunde: true, assignedToId: userId },
+          },
+        }),
+      ]);
+
+      // Completion & Verteilung berechnen
+      let ampelGreen = 0, ampelYellow = 0, ampelRed = 0;
+      let tempHot = 0, tempWarm = 0, tempCold = 0;
+
+      const offeneKunden = meineKundenRaw
+        .map((k) => {
+          if (k.ampelStatus === 'GREEN') ampelGreen++;
+          else if (k.ampelStatus === 'YELLOW') ampelYellow++;
+          else ampelRed++;
+
+          if (k.temperatur === 'HOT') tempHot++;
+          else if (k.temperatur === 'WARM') tempWarm++;
+          else tempCold++;
+
+          const hasPersonData = !!k.person;
+          const hasHaushaltData = !!k.haushalt;
+          const hasFinanzplanData = !!k.finanzplan;
+          const objekteCount = k.objekte.length;
+
+          let missingCount = 0;
+          if (!hasPersonData) missingCount++;
+          if (!hasHaushaltData) missingCount++;
+          if (!hasFinanzplanData) missingCount++;
+          if (objekteCount === 0) missingCount++;
+
+          return {
+            id: k.id,
+            firstName: k.firstName,
+            lastName: k.lastName,
+            ampelStatus: k.ampelStatus,
+            temperatur: k.temperatur,
+            hasPersonData,
+            hasHaushaltData,
+            hasFinanzplanData,
+            objekteCount,
+            missingCount,
+          };
+        })
+        .filter((k) => k.missingCount > 0)
+        .sort((a, b) => b.missingCount - a.missingCount);
+
+      res.json({
+        userName,
+        meineKunden: {
+          total: meineKundenRaw.length,
+          mitOffenenDaten: offeneKunden.length,
+          ampelVerteilung: { green: ampelGreen, yellow: ampelYellow, red: ampelRed },
+          temperaturVerteilung: { hot: tempHot, warm: tempWarm, cold: tempCold },
+        },
+        verfuegbareLeads: {
+          total: verfuegbareLeadsCount,
+          neueHeute: neueLeadsHeute,
+          letzteLeads,
+        },
+        offeneKunden,
+        meineAktivitaeten,
+        aktivitaetenHeute,
+      });
+    } catch (error: any) {
+      console.error('StatsController.getMyDashboard error:', error);
       res.status(500).json({ error: error.message });
     }
   }
