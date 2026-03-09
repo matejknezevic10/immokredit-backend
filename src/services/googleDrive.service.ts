@@ -56,8 +56,10 @@ function capitalizeName(name: string): string {
 export async function createCustomerFolder(
   firstName: string,
   lastName: string,
+  rootFolderId?: string,
 ): Promise<{ folderId: string; folderUrl: string }> {
   const drive = getDrive();
+  const parentId = rootFolderId || FOLDER_ID;
 
   // 1. List all existing folders to find highest number
   let allFolders: any[] = [];
@@ -65,7 +67,7 @@ export async function createCustomerFolder(
 
   do {
     const res = await drive.files.list({
-      q: `'${FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
       fields: 'nextPageToken, files(id, name)',
       pageSize: 200,
       pageToken,
@@ -92,14 +94,14 @@ export async function createCustomerFolder(
   const fullName = `${formattedFirst} ${formattedLast}`.trim();
   const folderName = `${nextNumber}_${fullName}`;
 
-  console.log(`[GDrive] Creating customer folder: ${folderName}`);
+  console.log(`[GDrive] Creating customer folder: ${folderName} in ${rootFolderId ? 'custom' : 'default'} root`);
 
   // 3. Create main customer folder
   const mainFolder = await drive.files.create({
     requestBody: {
       name: folderName,
       mimeType: 'application/vnd.google-apps.folder',
-      parents: [FOLDER_ID],
+      parents: [parentId],
     },
     fields: 'id',
   });

@@ -17,6 +17,7 @@ async function autoCreateLead(
   emailFrom: string,
   personenNamen: string[],
   extractedFields: Record<string, { value: string | number | null; confidence: number }>,
+  rootFolderId?: string,
 ): Promise<{ leadId: string; leadName: string }> {
 
   let firstName = '';
@@ -93,7 +94,7 @@ async function autoCreateLead(
 
   // Create Google Drive folder
   try {
-    const { folderId, folderUrl } = await createCustomerFolder(firstName, lastName);
+    const { folderId, folderUrl } = await createCustomerFolder(firstName, lastName, rootFolderId);
     await prisma.lead.update({
       where: { id: lead.id },
       data: { googleDriveFolderId: folderId, googleDriveFolderUrl: folderUrl },
@@ -109,13 +110,13 @@ async function autoCreateLead(
 // ============================================================
 // Helper: Ensure lead has Google Drive folder, create if missing
 // ============================================================
-async function ensureDriveFolder(leadId: string): Promise<void> {
+async function ensureDriveFolder(leadId: string, rootFolderId?: string): Promise<void> {
   // Re-fetch the lead to get the LATEST data (important after autoCreateLead)
   const lead = await prisma.lead.findUnique({ where: { id: leadId } });
   if (!lead || lead.googleDriveFolderId) return; // Already has folder → skip
 
   try {
-    const { folderId, folderUrl } = await createCustomerFolder(lead.firstName, lead.lastName);
+    const { folderId, folderUrl } = await createCustomerFolder(lead.firstName, lead.lastName, rootFolderId);
     await prisma.lead.update({
       where: { id: lead.id },
       data: { googleDriveFolderId: folderId, googleDriveFolderUrl: folderUrl },
@@ -587,7 +588,7 @@ class DocumentsController {
     try {
       console.log('[n8n-Upload] Received request');
 
-      const { filename, mimeType, fileBase64, emailFrom, emailSubject, fileSize, emailBody } = req.body;
+      const { filename, mimeType, fileBase64, emailFrom, emailSubject, fileSize, emailBody, targetFolderId } = req.body;
 
       if (!fileBase64) {
         return res.status(400).json({ error: 'No fileBase64 provided' });
@@ -646,7 +647,7 @@ class DocumentsController {
       let isNewlyCreatedLead = false;
       if (!customerMatch.leadId && emailFrom) {
         console.log(`[n8n-Upload] No lead found — auto-creating from ${emailFrom}...`);
-        const autoLead = await autoCreateLead(emailFrom, ocrResult.personenNamen, ocrResult.fields);
+        const autoLead = await autoCreateLead(emailFrom, ocrResult.personenNamen, ocrResult.fields, targetFolderId);
         customerMatch = {
           leadId: autoLead.leadId,
           leadName: autoLead.leadName,
@@ -659,7 +660,7 @@ class DocumentsController {
       // ── Ensure lead has Drive folder (ONLY for existing leads without one) ──
       // Skip if we just created the lead (autoCreateLead already made the folder)
       if (customerMatch.leadId && !isNewlyCreatedLead) {
-        await ensureDriveFolder(customerMatch.leadId);
+        await ensureDriveFolder(customerMatch.leadId, targetFolderId);
       }
 
       // Save document
