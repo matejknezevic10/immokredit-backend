@@ -8,6 +8,57 @@ const prisma = new PrismaClient();
 
 const PIPEDRIVE_API_TOKEN = process.env.PIPEDRIVE_API_TOKEN || '';
 const PIPEDRIVE_BASE_URL = process.env.PIPEDRIVE_BASE_URL || 'https://api.pipedrive.com/v1';
+const ZUSTAENDIG_FIELD_KEY = process.env.PIPEDRIVE_ZUSTAENDIG_FIELD_KEY || '';
+
+// Pipedrive Team-Mapping (gleich wie in pipedrive.routes.ts)
+const TEAM_MEMBERS = [
+  { id: 38, name: 'Roland', fullName: 'Roland Potlog', email: 'roland@immo-kredit.net' },
+  { id: 39, name: 'Slaven', fullName: 'Slaven Pavic', email: 'slaven@immo-kredit.net' },
+  { id: 40, name: 'Daniel', fullName: 'Daniel Tunjic', email: 'daniel@immo-kredit.net' },
+];
+
+function resolveAssignee(deal: any): { id: number; name: string; fullName: string } | null {
+  if (!ZUSTAENDIG_FIELD_KEY) return null;
+  const fieldValue = deal[ZUSTAENDIG_FIELD_KEY];
+  if (!fieldValue) return null;
+  const optionId = typeof fieldValue === 'string' ? parseInt(fieldValue) : fieldValue;
+  return TEAM_MEMBERS.find((m) => m.id === optionId) || null;
+}
+
+// Pipedrive Stage-Namen → kurze Labels
+function mapStageName(stageName: string): string {
+  const name = stageName.toLowerCase();
+  if (name.includes('sammeln') || name.includes('unterlagen s')) return 'Unterlagen sammeln';
+  if (name.includes('vollständig') || name.includes('vollstaendig') || name.includes('aufbereitung')) return 'Aufbereitung';
+  if (name.includes('bank') || name.includes('eingereicht')) return 'Eingereicht / Bank';
+  if (name.includes('genehmigt') || name.includes('angebot') || name.includes('zusage')) return 'Genehmigt';
+  if (name.includes('abschluss') || name.includes('won') || name.includes('gewonnen')) return 'Abschluss';
+  if (name.includes('neuer') || name.includes('lead')) return 'Neuer Lead';
+  if (name.includes('qualif')) return 'Qualifiziert';
+  return stageName;
+}
+
+// Stages-Cache für Pipedrive
+let stagesCache: any[] | null = null;
+let stagesCacheTime = 0;
+
+async function getStages(): Promise<any[]> {
+  if (stagesCache && Date.now() - stagesCacheTime < 5 * 60 * 1000) {
+    return stagesCache;
+  }
+  try {
+    const pipRes = await fetch(`${PIPEDRIVE_BASE_URL}/pipelines?api_token=${PIPEDRIVE_API_TOKEN}`);
+    const pipData = await pipRes.json() as any;
+    if (!pipData.success || !pipData.data?.length) return [];
+    const stgRes = await fetch(`${PIPEDRIVE_BASE_URL}/stages?pipeline_id=${pipData.data[0].id}&api_token=${PIPEDRIVE_API_TOKEN}`);
+    const stgData = await stgRes.json() as any;
+    stagesCache = stgData.data || [];
+    stagesCacheTime = Date.now();
+    return stagesCache!;
+  } catch {
+    return [];
+  }
+}
 
 export class StatsController {
   // GET /api/stats
@@ -179,6 +230,42 @@ export class StatsController {
         .filter((k) => k.missingCount > 0)
         .sort((a, b) => b.missingCount - a.missingCount);
 
+      // Pipedrive Deals für diesen User laden
+      let meineDeals: any[] = [];
+      if (PIPEDRIVE_API_TOKEN) {
+        try {
+          const stages = await getStages();
+          const stageMap = new Map(stages.map((s: any) => [s.id, s]));
+
+          // User-Name → Pipedrive Member matchen (Vorname reicht)
+          const userFirstName = userName.split(' ')[0].toLowerCase();
+
+          const dealsRes = await fetch(`${PIPEDRIVE_BASE_URL}/deals?status=open&limit=500&api_token=${PIPEDRIVE_API_TOKEN}`);
+          const dealsData = await dealsRes.json() as any;
+          if (dealsData.success && dealsData.data) {
+            meineDeals = dealsData.data
+              .map((d: any) => {
+                const assignee = resolveAssignee(d);
+                const stage = stageMap.get(d.stage_id);
+                return {
+                  pipedriveDealId: d.id,
+                  title: d.title,
+                  value: d.value || 0,
+                  stage: stage?.name ? mapStageName(stage.name) : 'Unbekannt',
+                  personName: d.person_id?.name || null,
+                  assigneeName: assignee?.name || null,
+                  addTime: d.add_time,
+                };
+              })
+              .filter((d: any) =>
+                d.assigneeName && d.assigneeName.toLowerCase() === userFirstName
+              );
+          }
+        } catch (err: any) {
+          console.error('[Dashboard] Pipedrive deals error:', err.message);
+        }
+      }
+
       res.json({
         userName,
         meineKunden: {
@@ -195,6 +282,7 @@ export class StatsController {
         offeneKunden,
         meineAktivitaeten,
         aktivitaetenHeute,
+        meineDeals,
       });
     } catch (error: any) {
       console.error('StatsController.getMyDashboard error:', error);
