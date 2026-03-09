@@ -67,14 +67,30 @@ const OBJEKT_FIELDS = [
   'ausstattungBadezimmer', 'heizung', 'ausstattungAussenbereich', 'weitereAusstattungen',
 ];
 
-/** Pick only whitelisted fields from body, converting empty strings to null */
+// Fields that are DateTime in Prisma schema — need ISO conversion
+const DATETIME_FIELDS = new Set(['baubeginn', 'bauende', 'geburtsdatum']);
+
+/** Pick only whitelisted fields from body, converting empty strings to null and fixing types */
 function pickFields(body: any, allowed: string[]): Record<string, any> {
   const result: Record<string, any> = {};
   for (const key of allowed) {
     if (key in body) {
-      const val = body[key];
+      let val = body[key];
       // Convert empty strings to null (prevents Prisma DateTime/Float parse errors)
-      result[key] = val === '' ? null : val;
+      if (val === '' || val === undefined) {
+        val = null;
+      }
+      // Convert date strings to proper ISO DateTime for Prisma
+      if (val && DATETIME_FIELDS.has(key)) {
+        if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val)) {
+          val = new Date(val + 'T00:00:00.000Z');
+        } else if (typeof val === 'string') {
+          val = new Date(val);
+        }
+        // If invalid date, set to null
+        if (val instanceof Date && isNaN(val.getTime())) val = null;
+      }
+      result[key] = val;
     }
   }
   return result;
