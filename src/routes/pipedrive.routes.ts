@@ -1,7 +1,10 @@
 // src/routes/pipedrive.routes.ts
 import { Router, Request, Response } from 'express';
+import { PrismaClient } from '@prisma/client';
+import { createSecureDocumentLink } from '../services/secureLink.service';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 const PIPEDRIVE_API_TOKEN = process.env.PIPEDRIVE_API_TOKEN || '';
 const PIPEDRIVE_BASE_URL = process.env.PIPEDRIVE_BASE_URL || 'https://api.pipedrive.com/v1';
@@ -51,7 +54,7 @@ function mapStage(stageName: string, orderNr: number): string {
   if (name.includes('bank') || name.includes('anfrage')) return 'BANK_ANFRAGE';
   if (name.includes('warten') || name.includes('zusage')) return 'WARTEN_AUF_ZUSAGE';
   if (name.includes('erhalten') || name.includes('zugesagt')) return 'ZUSAGE_ERHALTEN';
-  if (name.includes('abgeschlossen') || name.includes('won') || name.includes('gewonnen')) return 'ABGESCHLOSSEN';
+  if (name.includes('abgeschlossen') || name.includes('abschluss') || name.includes('won') || name.includes('gewonnen')) return 'ABGESCHLOSSEN';
   if (name.includes('verloren') || name.includes('lost')) return 'VERLOREN';
   const stageMap = ['NEUER_LEAD', 'QUALIFIZIERT', 'UNTERLAGEN_SAMMELN', 'UNTERLAGEN_VOLLSTAENDIG', 'BANK_ANFRAGE', 'WARTEN_AUF_ZUSAGE', 'ZUSAGE_ERHALTEN', 'ABGESCHLOSSEN', 'VERLOREN'];
   return stageMap[orderNr] || 'NEUER_LEAD';
@@ -127,6 +130,17 @@ router.get('/deals', async (req: Request, res: Response) => {
       };
     });
 
+    // Enrich with local leadId from DB
+    const pipedriveDealIds = deals.map((d: any) => d.pipedriveDealId).filter(Boolean);
+    if (pipedriveDealIds.length > 0) {
+      const localDeals = await prisma.deal.findMany({
+        where: { pipedriveDealId: { in: pipedriveDealIds } },
+        select: { pipedriveDealId: true, leadId: true },
+      });
+      const leadIdMap = new Map(localDeals.map(d => [d.pipedriveDealId, d.leadId]));
+      deals = deals.map((d: any) => ({ ...d, leadId: leadIdMap.get(d.pipedriveDealId) || null }));
+    }
+
     // Filter by assignee if requested
     if (assigneeFilter && assigneeFilter !== 'alle') {
       deals = deals.filter((d: any) => {
@@ -174,6 +188,39 @@ router.put('/deals/:id/stage', async (req: Request, res: Response) => {
     });
     const data = await response.json() as any;
     if (!data.success) throw new Error(data.error || 'Failed to update deal stage');
+
+    // Sync local DB deal stage
+    try {
+      const stages = await getStages();
+      const targetStage = stages.find((s: any) => s.id === stageId);
+      if (targetStage) {
+        const localStage = mapStage(targetStage.name, targetStage.order_nr);
+        const localDeal = await prisma.deal.findUnique({
+          where: { pipedriveDealId: parseInt(id) },
+        });
+        if (localDeal) {
+          await prisma.deal.update({
+            where: { id: localDeal.id },
+            data: { stage: localStage as any },
+          });
+          console.log(`[Pipedrive] Synced local deal ${localDeal.id} to stage ${localStage}`);
+
+          // Auto-trigger: Send secure document link when deal reaches ABGESCHLOSSEN
+          if (localStage === 'ABGESCHLOSSEN') {
+            createSecureDocumentLink({ leadId: localDeal.leadId }).then(result => {
+              if (result.success) {
+                console.log(`[Pipedrive] Auto-sent secure link for lead ${localDeal.leadId}`);
+              } else {
+                console.warn(`[Pipedrive] Secure link failed: ${result.error}`);
+              }
+            }).catch(err => console.error('[Pipedrive] Secure link error:', err));
+          }
+        }
+      }
+    } catch (syncErr) {
+      console.warn('[Pipedrive] Stage sync failed (non-critical):', syncErr);
+    }
+
     res.json({ success: true, deal: data.data });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
