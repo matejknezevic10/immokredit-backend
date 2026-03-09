@@ -4,6 +4,7 @@ import { PrismaClient, AmpelStatus, Temperatur } from '@prisma/client';
 import { leadsService } from '../services/leads.service';
 import { createCustomerFolder } from '../services/googleDrive.service';
 import { pipedriveService } from '../integrations/pipedrive.service';
+import { AuthRequest } from '../middleware/auth.middleware';
 
 const prisma = new PrismaClient();
 
@@ -62,6 +63,54 @@ export class LeadsController {
       res.json(result);
     } catch (error: any) {
       console.error('LeadsController.delete error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  // POST /api/leads/:id/convert-to-eigenkunde
+  async convertToEigenkunde(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const userId = (req as AuthRequest).user?.id;
+      const userName = (req as AuthRequest).user?.name || 'Unbekannt';
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Nicht authentifiziert' });
+      }
+
+      // Lead prüfen
+      const lead = await prisma.lead.findUnique({ where: { id } });
+      if (!lead) {
+        return res.status(404).json({ error: 'Lead nicht gefunden' });
+      }
+      if (lead.isKunde) {
+        return res.status(400).json({ error: 'Lead ist bereits ein Eigenkunde' });
+      }
+
+      // Konvertieren
+      const updated = await prisma.lead.update({
+        where: { id },
+        data: {
+          isKunde: true,
+          assignedToId: userId,
+          assignedAt: new Date(),
+        },
+      });
+
+      // Activity-Log
+      await prisma.activity.create({
+        data: {
+          leadId: id,
+          type: 'DEAL_UPDATED',
+          title: 'Als Eigenkunde übernommen',
+          description: `${userName} hat den Lead als Eigenkunden übernommen`,
+        },
+      });
+
+      console.log(`[Leads] ✅ ${lead.firstName} ${lead.lastName} → Eigenkunde von ${userName}`);
+      res.json(updated);
+    } catch (error: any) {
+      console.error('[Leads] convertToEigenkunde error:', error);
       res.status(500).json({ error: error.message });
     }
   }

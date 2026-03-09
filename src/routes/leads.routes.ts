@@ -8,6 +8,9 @@ const router = Router();
 // POST /api/leads/onepage-funnel — MUST be before /:id to avoid conflict
 router.post('/onepage-funnel', (req, res) => leadsController.onepageFunnel(req, res));
 
+// POST /api/leads/:id/convert-to-eigenkunde — MUST be before /:id to avoid conflict
+router.post('/:id/convert-to-eigenkunde', (req, res) => leadsController.convertToEigenkunde(req, res));
+
 // GET /api/leads
 router.get('/', (req, res) => leadsController.getAll(req, res));
 

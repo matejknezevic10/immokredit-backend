@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { berechneKennzahlen } from '../services/kennzahlen.service';
+import { AuthRequest } from '../middleware/auth.middleware';
 
 const prisma = new PrismaClient();
 
@@ -80,10 +81,16 @@ function pickFields(body: any, allowed: string[]): Record<string, any> {
 }
 
 export const kundeController = {
-  // ── Get all Kunden (leads with customer data) ──
+  // ── Get all Eigenkunden des aktuellen Users ──
   async getAll(req: Request, res: Response) {
     try {
+      const userId = (req as AuthRequest).user?.id;
+
       const kunden = await prisma.lead.findMany({
+        where: {
+          isKunde: true,
+          assignedToId: userId,
+        },
         select: {
           id: true,
           firstName: true,
@@ -93,6 +100,7 @@ export const kundeController = {
           ampelStatus: true,
           temperatur: true,
           createdAt: true,
+          assignedAt: true,
           person: { select: { id: true } },
           haushalt: { select: { id: true } },
           finanzplan: { select: { id: true } },
@@ -110,6 +118,7 @@ export const kundeController = {
         ampelStatus: k.ampelStatus,
         temperatur: k.temperatur,
         createdAt: k.createdAt,
+        assignedAt: k.assignedAt,
         hasPersonData: !!k.person,
         hasHaushaltData: !!k.haushalt,
         hasFinanzplanData: !!k.finanzplan,

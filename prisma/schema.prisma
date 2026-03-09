@@ -16,6 +16,9 @@ model User {
   notificationPrefs Json?    // { neuerLead, dokumentHochgeladen, emailGeoeffnet, pipelineAenderung, tagesReport, wochenReport, systemUpdates }
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  // Eigenkunden — Leads die diesem User zugewiesen sind
+  kunden            Lead[]   @relation("AssignedKunden")
 }
 
 model Lead {
@@ -37,6 +40,13 @@ model Lead {
   updatedAt              DateTime    @updatedAt
   googleDriveFolderId    String?
   googleDriveFolderUrl   String?
+
+  // Eigenkunde-Felder
+  isKunde                Boolean     @default(false)
+  assignedToId           String?
+  assignedTo             User?       @relation("AssignedKunden", fields: [assignedToId], references: [id])
+  assignedAt             DateTime?
+
   activities             Activity[]
   deal                   Deal?
   documents              Document[]
@@ -51,6 +61,8 @@ model Lead {
   @@index([email])
   @@index([phone])
   @@index([pipedrivePersonId])
+  @@index([isKunde])
+  @@index([assignedToId])
   @@index([pipedriveDealId])
 }
 

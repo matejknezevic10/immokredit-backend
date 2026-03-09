@@ -30,10 +30,13 @@ export interface UpdateLeadDto {
 }
 
 export class LeadsService {
-  // Get all leads
+  // Get all leads (nur nicht-konvertierte — Eigenkunden sind im /kunde Bereich)
   async getAll(filters?: any) {
     return await prisma.lead.findMany({
-      where: filters,
+      where: {
+        ...filters,
+        isKunde: false,
+      },
       include: {
         deal: true,
         documents: true,
