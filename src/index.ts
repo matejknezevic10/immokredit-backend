@@ -59,7 +59,75 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
+    version: 'v4-autocreate',
   });
+});
+
+// Temporary diagnostic endpoint (public) — REMOVE AFTER DEBUGGING
+app.get('/debug/pipeline-enrichment', async (req, res) => {
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const debugPrisma = new PrismaClient();
+
+    const PIPEDRIVE_API_TOKEN = process.env.PIPEDRIVE_API_TOKEN || '';
+    const PIPEDRIVE_BASE_URL = process.env.PIPEDRIVE_BASE_URL || 'https://api.pipedrive.com/v1';
+
+    // Fetch deals from Pipedrive
+    const pdResponse = await fetch(`${PIPEDRIVE_BASE_URL}/deals?status=open&limit=10&api_token=${PIPEDRIVE_API_TOKEN}`);
+    const pdData = await pdResponse.json() as any;
+    const pdDeals = (pdData.data || []).slice(0, 5);
+
+    const dealSummary = pdDeals.map((d: any) => ({
+      id: d.id,
+      title: d.title,
+      personName: d.person_id?.name || null,
+      personEmail: d.person_id?.email?.[0]?.value || null,
+      person_id_type: typeof d.person_id,
+    }));
+
+    const pdIds = pdDeals.map((d: any) => d.id);
+
+    // Check local DB
+    const localDeals = await debugPrisma.deal.findMany({
+      where: { pipedriveDealId: { in: pdIds } },
+      select: { pipedriveDealId: true, leadId: true },
+    });
+
+    const localLeads = await debugPrisma.lead.findMany({
+      where: { pipedriveDealId: { in: pdIds } },
+      select: { pipedriveDealId: true, id: true },
+    });
+
+    // Count all records
+    const totalDeals = await debugPrisma.deal.count();
+    const totalLeads = await debugPrisma.lead.count();
+    const dealsWithPdId = await debugPrisma.deal.findMany({
+      select: { pipedriveDealId: true },
+      take: 20,
+    });
+    const leadsWithPdId = await debugPrisma.lead.findMany({
+      where: { pipedriveDealId: { not: null } },
+      select: { pipedriveDealId: true, id: true },
+      take: 20,
+    });
+
+    await debugPrisma.$disconnect();
+
+    res.json({
+      pipedriveDeals: dealSummary,
+      pipedriveIds: pdIds,
+      localDealsMatched: localDeals,
+      localLeadsMatched: localLeads,
+      dbStats: {
+        totalDeals,
+        totalLeads,
+        dealPipedriveDealIds: dealsWithPdId.map((d: any) => d.pipedriveDealId),
+        leadPipedriveDealIds: leadsWithPdId.map((l: any) => ({ pdId: l.pipedriveDealId, leadId: l.id })),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
 });
 
 // Auth routes (public)
