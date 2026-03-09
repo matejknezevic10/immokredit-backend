@@ -117,6 +117,42 @@ export const kundeController = {
   // ══════════════════════════════════════════
   // HAUSHALT
   // ══════════════════════════════════════════
+
+  // Helper: einkommen JSON → flache Felder für Frontend
+  _flattenEinkommen(haushalt: any) {
+    const result = { ...haushalt };
+    if (Array.isArray(result.einkommen) && result.einkommen.length > 0) {
+      const first = result.einkommen[0];
+      if (first.nettoverdienst !== undefined && !result.nettoverdienst) {
+        result.nettoverdienst = first.nettoverdienst;
+      }
+      if (first.sonstigeEinkuenfte !== undefined && !result.sonstigeEinkuenfte) {
+        result.sonstigeEinkuenfte = first.sonstigeEinkuenfte;
+      }
+    }
+    return result;
+  },
+
+  // Helper: flache Felder → einkommen JSON für DB
+  _packEinkommen(body: any) {
+    const data = { ...body };
+    // Wenn nettoverdienst oder sonstigeEinkuenfte als flache Felder kommen → in einkommen packen
+    if (data.nettoverdienst !== undefined || data.sonstigeEinkuenfte !== undefined) {
+      const existing = Array.isArray(data.einkommen) ? data.einkommen : [];
+      const first = existing[0] || { name: 'Kreditnehmer' };
+      if (data.nettoverdienst !== undefined) {
+        first.nettoverdienst = data.nettoverdienst;
+        delete data.nettoverdienst;
+      }
+      if (data.sonstigeEinkuenfte !== undefined) {
+        first.sonstigeEinkuenfte = data.sonstigeEinkuenfte;
+        delete data.sonstigeEinkuenfte;
+      }
+      data.einkommen = [first, ...existing.slice(1)];
+    }
+    return data;
+  },
+
   async getHaushalt(req: Request, res: Response) {
     try {
       const { leadId } = req.params;
@@ -124,7 +160,8 @@ export const kundeController = {
       if (!haushalt) {
         haushalt = await prisma.customerHaushalt.create({ data: { leadId } });
       }
-      res.json(haushalt);
+      // Flatten einkommen JSON for frontend
+      res.json(kundeController._flattenEinkommen(haushalt));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -134,13 +171,15 @@ export const kundeController = {
     try {
       const { leadId } = req.params;
       const existing = await prisma.customerHaushalt.findUnique({ where: { leadId } });
+      // Pack flat fields back into einkommen JSON
+      const data = kundeController._packEinkommen(req.body);
       let haushalt;
       if (existing) {
-        haushalt = await prisma.customerHaushalt.update({ where: { leadId }, data: req.body });
+        haushalt = await prisma.customerHaushalt.update({ where: { leadId }, data });
       } else {
-        haushalt = await prisma.customerHaushalt.create({ data: { leadId, ...req.body } });
+        haushalt = await prisma.customerHaushalt.create({ data: { leadId, ...data } });
       }
-      res.json(haushalt);
+      res.json(kundeController._flattenEinkommen(haushalt));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
