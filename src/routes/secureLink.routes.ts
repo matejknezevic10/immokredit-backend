@@ -51,11 +51,22 @@ router.post('/validate', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/secure-link/documents/:accessToken — Get document list (PUBLIC, no auth)
-// Note: This only returns metadata, not the actual files
-router.get('/documents/:accessToken', async (req: Request, res: Response) => {
+// POST /api/secure-link/documents — Get document list (requires accessToken + password)
+// Changed from GET to POST: password must be verified before exposing document metadata
+router.post('/documents', async (req: Request, res: Response) => {
   try {
-    const documents = await getSecureLinkDocuments(req.params.accessToken);
+    const { accessToken, password } = req.body;
+    if (!accessToken || !password) {
+      return res.status(400).json({ error: 'accessToken und password erforderlich' });
+    }
+
+    // Validate password BEFORE returning documents
+    const validation = await validateSecureLink(accessToken, password);
+    if (!validation.valid) {
+      return res.status(403).json({ error: validation.error || 'Zugang verweigert' });
+    }
+
+    const documents = await getSecureLinkDocuments(accessToken);
     res.json(documents);
   } catch (err: any) {
     res.status(500).json({ error: err.message });

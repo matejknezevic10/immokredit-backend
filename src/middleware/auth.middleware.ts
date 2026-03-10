@@ -2,7 +2,14 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'immokredit-secret-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[SECURITY] JWT_SECRET ist nicht gesetzt! Server kann keine Tokens validieren.');
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET muss in Production gesetzt sein');
+  }
+}
+const JWT_SECRET_VALUE = JWT_SECRET || 'dev-only-secret-not-for-production';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -22,7 +29,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
 
   try {
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, JWT_SECRET_VALUE) as any;
     req.user = {
       id: decoded.id,
       email: decoded.email,

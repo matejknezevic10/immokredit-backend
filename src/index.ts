@@ -3,6 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import authRoutes, { ensureUsersExist } from './routes/auth.routes';
 import leadsRoutes from './routes/leads.routes';
 import dealsRoutes from './routes/deals.routes';
@@ -13,6 +15,7 @@ import chatRoutes from './routes/chat.routes';
 import { authMiddleware } from './middleware/auth.middleware';
 import jeffreyRoutes from './routes/jeffrey.routes';
 import { leadsController } from './controllers/leads.controller';
+import { documentsController } from './controllers/documents.controller';
 import { processVoiceMemo } from './services/voicememo.service';
 import kundeRoutes from './routes/kunde.routes';
 import jeffreyOcrRoutes from './routes/jeffrey-ocr.routes';
@@ -34,7 +37,12 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
 });
 
-// Middleware
+// ── Security Middleware ──
+app.use(helmet({
+  contentSecurityPolicy: false,   // CSP handled by frontend (Vercel)
+  crossOriginEmbedderPolicy: false,
+}));
+
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -46,6 +54,53 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ── Rate Limiting ──
+// Global: 200 requests per 15 minutes per IP
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Zu viele Anfragen. Bitte später erneut versuchen.' },
+});
+app.use(globalLimiter);
+
+// Strict: Login — 5 attempts per 15 minutes per IP
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Zu viele Login-Versuche. Bitte in 15 Minuten erneut versuchen.' },
+});
+
+// Strict: Public form submit — 10 per 15 minutes per IP
+const funnelLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Zu viele Anfragen. Bitte später erneut versuchen.' },
+});
+
+// Strict: SecureLink validate — 10 attempts per 15 minutes (brute-force protection)
+const secureLinkLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Zu viele Versuche. Bitte warten Sie 15 Minuten.' },
+});
+
+// Webhook: 30 per minute per IP (n8n, SendGrid)
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Rate limit exceeded' },
+});
 
 // Request logging
 app.use((req, res, next) => {
@@ -59,19 +114,23 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
-    version: 'v5-cleanup',
+    version: 'v6-security',
   });
 });
 
-// Auth routes (public)
+// ── Public routes (rate-limited, no auth) ──
+
+// Auth routes — login has strict rate limit
+app.use('/api/auth/login', authLimiter);
 app.use('/api/auth', authRoutes);
 
-// Document inbound from n8n (public - no auth needed)
-app.use('/api/documents', documentsRoutes);
+// Document webhooks ONLY (public — n8n, SendGrid inbound)
+const webhookUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+app.post('/api/documents/inbound', webhookLimiter, webhookUpload.any(), (req, res) => documentsController.inboundWebhook(req, res));
+app.post('/api/documents/n8n-upload', webhookLimiter, (req, res) => documentsController.n8nUpload(req, res));
 
-// ── Public routes (no auth) ──
-// OnePage Funnel — must be BEFORE authMiddleware
-app.post('/api/leads/onepage-funnel', (req, res) => leadsController.onepageFunnel(req, res));
+// OnePage Funnel — public lead form
+app.post('/api/leads/onepage-funnel', funnelLimiter, (req, res) => leadsController.onepageFunnel(req, res));
 
 // Jeffrey checklist/reminder routes (public for now)
 app.use('/api/jeffrey', jeffreyRoutes);
@@ -83,9 +142,13 @@ app.use('/api/tracking', trackingRoutes);
 app.use('/api/voice-agent', voiceAgentRoutes);
 
 // Secure document link (validate + documents public, /create requires auth — handled in router)
+app.use('/api/secure-link/validate', secureLinkLimiter);
 app.use('/api/secure-link', secureLinkRoutes);
 
 // ── Protected API Routes (require JWT) ──
+
+// Documents — protected (except webhooks above)
+app.use('/api/documents', authMiddleware, documentsRoutes);
 
 // Voice Memo — requires auth (user must be logged in)
 app.post('/api/leads/voice-memo', authMiddleware, upload.single('audio'), async (req: any, res) => {

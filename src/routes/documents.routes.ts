@@ -4,9 +4,31 @@ import multer from 'multer';
 import { documentsController } from '../controllers/documents.controller';
 
 const router = Router();
+
+// Allowed MIME types for manual uploads
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/tiff',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/csv',
+]);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Dateityp nicht erlaubt: ${file.mimetype}`));
+    }
+  },
 });
 
 // GET /api/documents/stats (muss VOR /:id stehen!)

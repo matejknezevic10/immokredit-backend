@@ -8,7 +8,7 @@ import { authMiddleware, AuthRequest } from '../middleware/auth.middleware';
 const router = Router();
 const prisma = new PrismaClient();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'immokredit-secret-key-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-not-for-production';
 
 // ============================================================
 // Seed-Daten: Werden beim ersten Start in die DB geschrieben
