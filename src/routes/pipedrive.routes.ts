@@ -209,7 +209,34 @@ router.get('/deals', async (req: Request, res: Response) => {
       }
 
       console.log(`[Pipedrive] Enrichment: ${pipedriveDealIds.length} pipeline deals → ${leadIdMap.size} matched/created`);
-      deals = deals.map((d: any) => ({ ...d, leadId: leadIdMap.get(d.pipedriveDealId) || null }));
+
+      // Fetch real Lead data (ampelStatus, temperatur, score) for all matched leads
+      const allLeadIds = Array.from(new Set(Array.from(leadIdMap.values())));
+      const leadDataMap = new Map<string, { ampelStatus: string; temperatur: string; score: number }>();
+      if (allLeadIds.length > 0) {
+        const leadsData = await prisma.lead.findMany({
+          where: { id: { in: allLeadIds } },
+          select: { id: true, ampelStatus: true, temperatur: true, score: true },
+        });
+        for (const ld of leadsData) {
+          leadDataMap.set(ld.id, { ampelStatus: ld.ampelStatus, temperatur: ld.temperatur, score: ld.score });
+        }
+      }
+
+      deals = deals.map((d: any) => {
+        const leadId = leadIdMap.get(d.pipedriveDealId) || null;
+        const leadData = leadId ? leadDataMap.get(leadId) : null;
+        return {
+          ...d,
+          leadId,
+          lead: d.lead ? {
+            ...d.lead,
+            ampelStatus: leadData?.ampelStatus || d.lead.ampelStatus,
+            temperatur: leadData?.temperatur || d.lead.temperatur,
+            score: leadData?.score ?? d.lead.score,
+          } : null,
+        };
+      });
     }
 
     // Filter by assignee if requested

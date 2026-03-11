@@ -8,6 +8,127 @@ import { AuthRequest } from '../middleware/auth.middleware';
 
 const prisma = new PrismaClient();
 
+// ============================================================
+// Scoring-Logik basierend auf Funnel-Antworten (PDF v2 mit Korrekturen)
+// 6 von 10 Fragen fließen in den Score ein.
+// Max Rohpunkte = 123, normalisiert auf 100.
+// ============================================================
+function calculateScoreFromFunnelAnswers(funnelAnswers: any): { score: number; temperatur: Temperatur; ampelStatus: AmpelStatus } {
+  if (!funnelAnswers) return { score: 0, temperatur: Temperatur.WARM, ampelStatus: AmpelStatus.YELLOW };
+
+  let rawScore = 0;
+  const fa = funnelAnswers;
+
+  // 1. Finanzierungsart (max 8 Pkt)
+  const finanzierungsartMap: Record<string, number> = {
+    'Haus': 8, 'Hauskauf': 8,
+    'Wohnung': 8, 'Wohnungskauf': 8,
+    'Umschuldung': 7,
+    'Grundstück': 6, 'Grundstueck': 6,
+  };
+  if (fa.finanzierungsart) {
+    const key = Object.keys(finanzierungsartMap).find(k =>
+      fa.finanzierungsart.toLowerCase().includes(k.toLowerCase())
+    );
+    rawScore += key ? finanzierungsartMap[key] : 6;
+  }
+
+  // 2. Immobilie bereits gefunden? (max 20 Pkt, korrigiert von 12)
+  if (fa.immobilieGefunden) {
+    const val = fa.immobilieGefunden.toLowerCase();
+    if (val.includes('ja') || val === 'yes') rawScore += 20;
+    else rawScore += 4;
+  }
+
+  // 3. Finanzieller Rahmen / Kaufpreis (max 15 Pkt)
+  if (fa.kaufpreis) {
+    const kp = fa.kaufpreis.replace(/[^0-9.]/g, '');
+    const num = parseFloat(kp);
+    if (!isNaN(num)) {
+      if (num > 500000) rawScore += 15;
+      else if (num > 300000) rawScore += 15;
+      else if (num > 150000) rawScore += 12;
+      else rawScore += 8;
+    } else {
+      // Text-basierte Zuordnung
+      const text = fa.kaufpreis.toLowerCase();
+      if (text.includes('500') || text.includes('über 500')) rawScore += 15;
+      else if (text.includes('300')) rawScore += 15;
+      else if (text.includes('150')) rawScore += 12;
+      else rawScore += 8;
+    }
+  }
+
+  // 4. Eigenmittel (max 40 Pkt, korrigiert von 25 — WICHTIGSTE FRAGE)
+  if (fa.eigenmittel) {
+    const em = fa.eigenmittel.replace(/[^0-9.]/g, '');
+    const num = parseFloat(em);
+    if (!isNaN(num)) {
+      if (num > 50000) rawScore += 40;
+      else if (num > 30000) rawScore += 35;
+      else if (num > 10000) rawScore += 20;
+      else rawScore += 5;
+    } else {
+      const text = fa.eigenmittel.toLowerCase();
+      if (text.includes('50') || text.includes('über 50')) rawScore += 40;
+      else if (text.includes('30')) rawScore += 35;
+      else if (text.includes('10')) rawScore += 20;
+      else rawScore += 5;
+    }
+  }
+
+  // 5. Netto-Haushaltseinkommen (max 20 Pkt)
+  if (fa.einkommen) {
+    const ek = fa.einkommen.replace(/[^0-9.]/g, '');
+    const num = parseFloat(ek);
+    if (!isNaN(num)) {
+      if (num > 6000) rawScore += 20;
+      else if (num > 4000) rawScore += 18;
+      else if (num > 2500) rawScore += 13;
+      else rawScore += 6;
+    } else {
+      const text = fa.einkommen.toLowerCase();
+      if (text.includes('6') || text.includes('über 6')) rawScore += 20;
+      else if (text.includes('4')) rawScore += 18;
+      else if (text.includes('2.5') || text.includes('2500')) rawScore += 13;
+      else rawScore += 6;
+    }
+  }
+
+  // 6. Berufliche Situation (max 20 Pkt)
+  if (fa.beruf) {
+    const berufMap: Record<string, number> = {
+      'angestellt': 20,
+      'selbstständig': 14, 'selbständig': 14, 'selbststaendig': 14, 'freelancer': 14,
+      'pensionist': 10, 'pension': 10, 'rentner': 10,
+      'arbeitslos': 3,
+    };
+    const berufLower = fa.beruf.toLowerCase();
+    const key = Object.keys(berufMap).find(k => berufLower.includes(k));
+    rawScore += key ? berufMap[key] : 10;
+  }
+
+  // Normalisieren auf 100 (max Rohpunkte = 8+20+15+40+20+20 = 123)
+  const MAX_RAW = 123;
+  const score = Math.round(Math.min(100, (rawScore / MAX_RAW) * 100));
+
+  // Temperatur & Ampel basierend auf normalisiertem Score
+  let temperatur: Temperatur;
+  let ampelStatus: AmpelStatus;
+  if (score >= 70) {
+    temperatur = Temperatur.HOT;
+    ampelStatus = AmpelStatus.GREEN;
+  } else if (score >= 40) {
+    temperatur = Temperatur.WARM;
+    ampelStatus = AmpelStatus.YELLOW;
+  } else {
+    temperatur = Temperatur.COLD;
+    ampelStatus = AmpelStatus.RED;
+  }
+
+  return { score, temperatur, ampelStatus };
+}
+
 export class LeadsController {
   // GET /api/leads
   async getAll(req: Request, res: Response) {
@@ -46,9 +167,17 @@ export class LeadsController {
   }
 
   // PATCH /api/leads/:id
-  async update(req: Request, res: Response) {
+  async update(req: any, res: Response) {
     try {
-      const lead = await leadsService.update(req.params.id, req.body);
+      const { assignSelf, ...updateData } = req.body;
+
+      // Handle "Lead übernehmen" — assign to authenticated user
+      if (assignSelf && req.user) {
+        updateData.assignedToId = req.user.id;
+        updateData.assignedAt = new Date();
+      }
+
+      const lead = await leadsService.update(req.params.id, updateData);
       res.json(lead);
     } catch (error: any) {
       console.error('LeadsController.update error:', error);
@@ -145,19 +274,9 @@ export class LeadsController {
         });
       }
 
-      // Map temperatur string to Prisma enum
-      const tempMap: Record<string, Temperatur> = {
-        HOT: Temperatur.HOT,
-        WARM: Temperatur.WARM,
-        COLD: Temperatur.COLD,
-      };
-
-      // Map temperatur to ampel status
-      const ampelMap: Record<string, AmpelStatus> = {
-        HOT: AmpelStatus.GREEN,
-        WARM: AmpelStatus.YELLOW,
-        COLD: AmpelStatus.RED,
-      };
+      // Server-seitige Scoring-Berechnung aus funnelAnswers
+      const scoring = calculateScoreFromFunnelAnswers(funnelAnswers);
+      console.log(`[OnePage-Funnel] Scoring: ${scoring.score}/100 (${scoring.temperatur}, ${scoring.ampelStatus})`);
 
       // Check for duplicate lead by email
       const existingLead = await prisma.lead.findFirst({
@@ -170,9 +289,9 @@ export class LeadsController {
         const updatedLead = await prisma.lead.update({
           where: { id: existingLead.id },
           data: {
-            score: score || existingLead.score,
-            temperatur: tempMap[temperatur] || existingLead.temperatur,
-            ampelStatus: ampelMap[temperatur] || existingLead.ampelStatus,
+            score: scoring.score,
+            temperatur: scoring.temperatur,
+            ampelStatus: scoring.ampelStatus,
             amount: amount || existingLead.amount,
             message: message || existingLead.message,
           },
@@ -183,7 +302,7 @@ export class LeadsController {
             leadId: existingLead.id,
             type: 'DEAL_UPDATED',
             title: 'Funnel erneut ausgefüllt',
-            description: `Neuer Score: ${score}/100 (${temperatur})`,
+            description: `Neuer Score: ${scoring.score}/100 (${scoring.temperatur})`,
             data: { funnelAnswers } as any,
           },
         });
@@ -205,14 +324,14 @@ export class LeadsController {
           source: source || 'ONEPAGE_FUNNEL',
           amount: amount || null,
           message: message || null,
-          score: score || 0,
-          temperatur: tempMap[temperatur] || Temperatur.WARM,
-          ampelStatus: ampelMap[temperatur] || AmpelStatus.YELLOW,
-          kaufwahrscheinlichkeit: score || 0,
+          score: scoring.score,
+          temperatur: scoring.temperatur,
+          ampelStatus: scoring.ampelStatus,
+          kaufwahrscheinlichkeit: scoring.score,
         },
       });
 
-      console.log(`[OnePage-Funnel] ✅ Lead created: ${lead.firstName} ${lead.lastName} (Score: ${score}, ${temperatur})`);
+      console.log(`[OnePage-Funnel] ✅ Lead created: ${lead.firstName} ${lead.lastName} (Score: ${scoring.score}, ${scoring.temperatur})`);
 
       // Activity: Lead created
       await prisma.activity.create({
@@ -220,7 +339,7 @@ export class LeadsController {
           leadId: lead.id,
           type: 'LEAD_CREATED',
           title: 'Lead über Webseite erstellt',
-          description: `Finanzierungsanfrage über OnePage-Funnel (Score: ${score}/100, ${temperatur})`,
+          description: `Finanzierungsanfrage über OnePage-Funnel (Score: ${scoring.score}/100, ${scoring.temperatur})`,
           data: { funnelAnswers } as any,
         },
       });
@@ -271,8 +390,8 @@ export class LeadsController {
         lead: {
           id: lead.id,
           name: `${lead.firstName} ${lead.lastName}`,
-          score,
-          temperatur,
+          score: scoring.score,
+          temperatur: scoring.temperatur,
         },
       });
     } catch (err: any) {

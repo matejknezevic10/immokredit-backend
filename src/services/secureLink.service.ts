@@ -31,6 +31,7 @@ const prisma = new PrismaClient();
 // ============================================================
 export interface CreateSecureLinkParams {
   leadId: string;
+  recipientEmail?: string; // optional: custom recipient (default = lead.email)
   expiresInHours?: number; // default 72h
   sentBy?: string;
 }
@@ -46,7 +47,7 @@ export interface CreateSecureLinkResult {
 export async function createSecureDocumentLink(
   params: CreateSecureLinkParams,
 ): Promise<CreateSecureLinkResult> {
-  const { leadId, expiresInHours = 72, sentBy } = params;
+  const { leadId, recipientEmail, expiresInHours = 72, sentBy } = params;
 
   try {
     // 1. Load lead with documents
@@ -102,10 +103,11 @@ export async function createSecureDocumentLink(
     const downloadUrl = `${frontendUrl}/secure-download/${accessToken}`;
 
     // 4. Send Email 1: Download-Link
+    const emailTo = recipientEmail || lead.email;
     const linkEmailHtml = generateLinkEmailHtml(lead, downloadUrl, expiresAt);
     await sendTrackedEmail({
       leadId,
-      to: lead.email,
+      to: emailTo,
       subject: 'ImmoKredit – Ihre Finanzierungsunterlagen',
       bodyHtml: linkEmailHtml,
       emailType: 'secure_link',
@@ -117,7 +119,7 @@ export async function createSecureDocumentLink(
       const passwordEmailHtml = generatePasswordEmailHtml(lead, password);
       await sendTrackedEmail({
         leadId,
-        to: lead.email,
+        to: emailTo,
         subject: 'ImmoKredit – Ihr Zugangspasswort',
         bodyHtml: passwordEmailHtml,
         emailType: 'secure_password',

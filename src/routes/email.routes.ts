@@ -100,4 +100,56 @@ router.get('/history/:leadId', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/email/inbox — Get inbound emails (from SendGrid Inbound Parse)
+router.get('/inbox', async (req: Request, res: Response) => {
+  try {
+    // Get distinct emails from documents (grouped by emailFrom + emailSubject + emailReceivedAt)
+    const inboundEmails = await prisma.document.findMany({
+      where: {
+        emailFrom: { not: null },
+        emailReceivedAt: { not: null },
+      },
+      select: {
+        id: true,
+        emailFrom: true,
+        emailSubject: true,
+        emailReceivedAt: true,
+        originalFilename: true,
+        type: true,
+        leadId: true,
+        lead: {
+          select: { firstName: true, lastName: true },
+        },
+      },
+      orderBy: { emailReceivedAt: 'desc' },
+    });
+
+    // Group by email (same from + subject + timestamp within 1 minute = same email)
+    const grouped: Record<string, any> = {};
+    for (const doc of inboundEmails) {
+      const key = `${doc.emailFrom}|${doc.emailSubject}|${doc.emailReceivedAt?.toISOString().slice(0, 16)}`;
+      if (!grouped[key]) {
+        grouped[key] = {
+          id: doc.id,
+          from: doc.emailFrom,
+          subject: doc.emailSubject || '(Kein Betreff)',
+          receivedAt: doc.emailReceivedAt,
+          attachments: [],
+          leadId: doc.leadId,
+          leadName: doc.lead ? `${doc.lead.firstName} ${doc.lead.lastName}` : null,
+        };
+      }
+      grouped[key].attachments.push({
+        filename: doc.originalFilename,
+        type: doc.type,
+      });
+    }
+
+    res.json(Object.values(grouped));
+  } catch (err: any) {
+    console.error('[Email Route] Inbox error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

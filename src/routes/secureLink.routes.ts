@@ -11,13 +11,13 @@ const router = Router();
 // POST /api/secure-link/create — Generate secure download link (auth required)
 router.post('/create', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { leadId, expiresInHours, sentBy } = req.body;
+    const { leadId, recipientEmail, expiresInHours, sentBy } = req.body;
 
     if (!leadId) {
       return res.status(400).json({ error: 'leadId erforderlich' });
     }
 
-    const result = await createSecureDocumentLink({ leadId, expiresInHours, sentBy });
+    const result = await createSecureDocumentLink({ leadId, recipientEmail, expiresInHours, sentBy });
 
     if (!result.success) {
       return res.status(500).json({ error: result.error });

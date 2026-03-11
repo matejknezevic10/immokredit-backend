@@ -43,6 +43,9 @@ model Lead {
   googleDriveFolderId    String?
   googleDriveFolderUrl   String?
 
+  // Manuelle Completion-Flags (JSON: { person: true, haushalt: false, ... })
+  completionFlags        Json?
+
   // Eigenkunde-Felder
   isKunde                Boolean     @default(false)
   assignedToId           String?

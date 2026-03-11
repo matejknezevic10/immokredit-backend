@@ -31,4 +31,7 @@ router.post('/:leadId/objekte', kundeController.createObjekt);
 router.put('/objekt/:objektId', kundeController.updateObjekt);
 router.delete('/objekt/:objektId', kundeController.deleteObjekt);
 
+// Completion flags (manual override)
+router.patch('/:leadId/completion', kundeController.updateCompletionFlags);
+
 export default router;

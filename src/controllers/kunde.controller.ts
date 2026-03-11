@@ -117,6 +117,7 @@ export const kundeController = {
           temperatur: true,
           createdAt: true,
           assignedAt: true,
+          completionFlags: true,
           person: { select: { id: true } },
           haushalt: { select: { id: true } },
           finanzplan: { select: { id: true } },
@@ -125,21 +126,25 @@ export const kundeController = {
         orderBy: { createdAt: 'desc' },
       });
 
-      const result = kunden.map(k => ({
-        id: k.id,
-        firstName: k.firstName,
-        lastName: k.lastName,
-        email: k.email,
-        phone: k.phone,
-        ampelStatus: k.ampelStatus,
-        temperatur: k.temperatur,
-        createdAt: k.createdAt,
-        assignedAt: k.assignedAt,
-        hasPersonData: !!k.person,
-        hasHaushaltData: !!k.haushalt,
-        hasFinanzplanData: !!k.finanzplan,
-        objekteCount: k.objekte.length,
-      }));
+      const result = kunden.map(k => {
+        const flags = (k as any).completionFlags as any;
+        return {
+          id: k.id,
+          firstName: k.firstName,
+          lastName: k.lastName,
+          email: k.email,
+          phone: k.phone,
+          ampelStatus: k.ampelStatus,
+          temperatur: k.temperatur,
+          createdAt: k.createdAt,
+          assignedAt: k.assignedAt,
+          hasPersonData: flags?.person ?? !!k.person,
+          hasHaushaltData: flags?.haushalt ?? !!k.haushalt,
+          hasFinanzplanData: flags?.finanzplan ?? !!k.finanzplan,
+          objekteCount: flags?.objekt !== undefined ? (flags.objekt ? 1 : 0) : k.objekte.length,
+          completionFlags: flags || null,
+        };
+      });
 
       res.json(result);
     } catch (err: any) {
@@ -390,6 +395,34 @@ export const kundeController = {
       res.json(kennzahlen);
     } catch (err: any) {
       console.error('[Kunde] getKennzahlen error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  // ── Toggle completion flags ──
+  async updateCompletionFlags(req: Request, res: Response) {
+    try {
+      const { leadId } = req.params;
+      const { section, value } = req.body; // section: 'person'|'haushalt'|'finanzplan'|'objekt', value: boolean
+
+      if (!['person', 'haushalt', 'finanzplan', 'objekt'].includes(section)) {
+        return res.status(400).json({ error: 'Ungültiger Abschnitt' });
+      }
+
+      const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+      if (!lead) return res.status(404).json({ error: 'Lead nicht gefunden' });
+
+      const currentFlags = (lead.completionFlags as any) || {};
+      const updatedFlags = { ...currentFlags, [section]: value };
+
+      await prisma.lead.update({
+        where: { id: leadId },
+        data: { completionFlags: updatedFlags },
+      });
+
+      res.json({ success: true, completionFlags: updatedFlags });
+    } catch (err: any) {
+      console.error('[Kunde] updateCompletionFlags error:', err);
       res.status(500).json({ error: err.message });
     }
   },

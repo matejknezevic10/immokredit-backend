@@ -27,6 +27,8 @@ export interface UpdateLeadDto {
   temperatur?: Temperatur;
   score?: number;
   kaufwahrscheinlichkeit?: number;
+  assignedToId?: string;
+  assignedAt?: Date;
 }
 
 export class LeadsService {
@@ -40,6 +42,7 @@ export class LeadsService {
       include: {
         deal: true,
         documents: true,
+        assignedTo: { select: { id: true, name: true } },
         activities: {
           take: 5,
           orderBy: { createdAt: 'desc' },
@@ -133,6 +136,7 @@ export class LeadsService {
         data,
         include: {
           deal: true,
+          assignedTo: { select: { id: true, name: true } },
         },
       });
 

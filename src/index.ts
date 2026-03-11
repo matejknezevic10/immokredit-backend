@@ -22,7 +22,7 @@ import jeffreyOcrRoutes from './routes/jeffrey-ocr.routes';
 import trackingRoutes from './routes/tracking.routes';
 import emailRoutes from './routes/email.routes';
 import voiceAgentRoutes from './routes/voiceAgent.routes';
-import signatureRoutes from './routes/signature.routes';
+import signatureRoutes, { publicSignatureRouter } from './routes/signature.routes';
 import secureLinkRoutes from './routes/secureLink.routes';
 
 // Load environment variables
@@ -144,6 +144,9 @@ app.use('/api/voice-agent', voiceAgentRoutes);
 // Secure document link (validate + documents public, /create requires auth — handled in router)
 app.use('/api/secure-link/validate', secureLinkLimiter);
 app.use('/api/secure-link', secureLinkRoutes);
+
+// Public signature routes (verify + sign via token — no auth required)
+app.use('/api/signature-public', publicSignatureRouter);
 
 // ── Protected API Routes (require JWT) ──
 
