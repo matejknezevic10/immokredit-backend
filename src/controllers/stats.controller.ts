@@ -129,9 +129,9 @@ export class StatsController {
         meineAktivitaeten,
         aktivitaetenHeute,
       ] = await Promise.all([
-        // 1) Alle eigenen Kunden mit Completion-Info
+        // 1) Alle eigenen Kunden mit Completion-Info (ohne archivierte/gelöschte)
         prisma.lead.findMany({
-          where: { isKunde: true, assignedToId: userId },
+          where: { isKunde: true, assignedToId: userId, archivedAt: null, deletedAt: null },
           select: {
             id: true,
             firstName: true,
