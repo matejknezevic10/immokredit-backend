@@ -11,6 +11,15 @@ router.post('/onepage-funnel', (req, res) => leadsController.onepageFunnel(req, 
 // POST /api/leads/:id/convert-to-eigenkunde — MUST be before /:id to avoid conflict
 router.post('/:id/convert-to-eigenkunde', (req, res) => leadsController.convertToEigenkunde(req, res));
 
+// POST /api/leads/:id/archive
+router.post('/:id/archive', (req, res) => leadsController.archive(req, res));
+
+// POST /api/leads/:id/unarchive
+router.post('/:id/unarchive', (req, res) => leadsController.unarchive(req, res));
+
+// POST /api/leads/:id/abschluss
+router.post('/:id/abschluss', (req, res) => leadsController.abschluss(req, res));
+
 // GET /api/leads
 router.get('/', (req, res) => leadsController.getAll(req, res));
 

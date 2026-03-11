@@ -38,6 +38,8 @@ export class LeadsService {
       where: {
         ...filters,
         isKunde: false,
+        deletedAt: null,
+        archivedAt: null,
       },
       include: {
         deal: true,

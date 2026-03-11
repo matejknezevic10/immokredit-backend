@@ -106,6 +106,8 @@ export const kundeController = {
         where: {
           isKunde: true,
           assignedToId: userId,
+          archivedAt: null,
+          deletedAt: null,
         },
         select: {
           id: true,
@@ -149,6 +151,38 @@ export const kundeController = {
       res.json(result);
     } catch (err: any) {
       console.error('[Kunde] getAll error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  // ── Get archived Kunden ──
+  async getArchived(req: Request, res: Response) {
+    try {
+      const userId = (req as AuthRequest).user?.id;
+
+      const kunden = await prisma.lead.findMany({
+        where: {
+          isKunde: true,
+          assignedToId: userId,
+          archivedAt: { not: null },
+          deletedAt: null,
+        },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          temperatur: true,
+          createdAt: true,
+          archivedAt: true,
+        },
+        orderBy: { archivedAt: 'desc' },
+      });
+
+      res.json(kunden);
+    } catch (err: any) {
+      console.error('[Kunde] getArchived error:', err);
       res.status(500).json({ error: err.message });
     }
   },

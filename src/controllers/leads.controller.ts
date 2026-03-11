@@ -245,6 +245,90 @@ export class LeadsController {
   }
 
   // ============================================================
+  // POST /api/leads/:id/archive — Kunde archivieren
+  // ============================================================
+  async archive(req: any, res: Response) {
+    try {
+      const { id } = req.params;
+      const lead = await prisma.lead.findUnique({ where: { id } });
+      if (!lead) return res.status(404).json({ error: 'Lead nicht gefunden' });
+
+      await prisma.lead.update({
+        where: { id },
+        data: { archivedAt: new Date() },
+      });
+
+      await prisma.activity.create({
+        data: {
+          leadId: id,
+          type: 'DEAL_UPDATED',
+          title: 'Kunde archiviert',
+          description: `${req.user?.name || 'System'} hat den Kunden archiviert`,
+        },
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Leads] archive error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  // ============================================================
+  // POST /api/leads/:id/unarchive — Kunde wiederherstellen
+  // ============================================================
+  async unarchive(req: any, res: Response) {
+    try {
+      const { id } = req.params;
+      await prisma.lead.update({
+        where: { id },
+        data: { archivedAt: null },
+      });
+
+      await prisma.activity.create({
+        data: {
+          leadId: id,
+          type: 'DEAL_UPDATED',
+          title: 'Kunde wiederhergestellt',
+          description: `${req.user?.name || 'System'} hat den Kunden aus dem Archiv wiederhergestellt`,
+        },
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Leads] unarchive error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  // ============================================================
+  // POST /api/leads/:id/abschluss — Soft-Delete (Abschluss)
+  // ============================================================
+  async abschluss(req: any, res: Response) {
+    try {
+      const { id } = req.params;
+      await prisma.lead.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
+
+      await prisma.activity.create({
+        data: {
+          leadId: id,
+          type: 'DEAL_UPDATED',
+          title: 'Kunde abgeschlossen',
+          description: `${req.user?.name || 'System'} hat den Kunden endgültig abgeschlossen`,
+        },
+      });
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Leads] abschluss error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  // ============================================================
   // POST /api/leads/onepage-funnel
   // Webhook from the OnePage embedded funnel
   // Creates lead with score + temperature from funnel answers,

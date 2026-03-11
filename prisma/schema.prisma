@@ -52,6 +52,10 @@ model Lead {
   assignedTo             User?       @relation("AssignedKunden", fields: [assignedToId], references: [id])
   assignedAt             DateTime?
 
+  // Archiv / Soft-Delete
+  archivedAt             DateTime?
+  deletedAt              DateTime?
+
   activities             Activity[]
   deal                   Deal?
   documents              Document[]

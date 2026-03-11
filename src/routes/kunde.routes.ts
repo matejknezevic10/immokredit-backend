@@ -7,6 +7,9 @@ const router = Router();
 // Kunden-Liste
 router.get('/', kundeController.getAll);
 
+// Archivierte Kunden — MUST be before /:leadId
+router.get('/archiv', kundeController.getArchived);
+
 // Kunde Overview (alle 4 Sparten)
 router.get('/:leadId', kundeController.getOverview);
 
