@@ -104,8 +104,12 @@ export async function createSecureDocumentLink(
 
     // 4. Send Email 1: Download-Link
     const emailTo = recipientEmail || lead.email;
+    if (!emailTo) {
+      return { success: false, error: 'Keine Email-Adresse vorhanden' };
+    }
+
     const linkEmailHtml = generateLinkEmailHtml(lead, downloadUrl, expiresAt);
-    await sendTrackedEmail({
+    const linkResult = await sendTrackedEmail({
       leadId,
       to: emailTo,
       subject: 'ImmoKredit – Ihre Finanzierungsunterlagen',
@@ -114,18 +118,24 @@ export async function createSecureDocumentLink(
       sentBy,
     });
 
-    // 5. Send Email 2: Passwort (delayed by 1 second for separation)
-    setTimeout(async () => {
-      const passwordEmailHtml = generatePasswordEmailHtml(lead, password);
-      await sendTrackedEmail({
-        leadId,
-        to: emailTo,
-        subject: 'ImmoKredit – Ihr Zugangspasswort',
-        bodyHtml: passwordEmailHtml,
-        emailType: 'secure_password',
-        sentBy,
-      });
-    }, 1500);
+    if (linkResult.status === 'failed') {
+      return { success: false, error: `Email-Versand fehlgeschlagen: ${linkResult.error || 'Unbekannter Fehler'}` };
+    }
+
+    // 5. Send Email 2: Passwort (short delay for separation)
+    const passwordEmailHtml = generatePasswordEmailHtml(lead, password);
+    const pwResult = await sendTrackedEmail({
+      leadId,
+      to: emailTo,
+      subject: 'ImmoKredit – Ihr Zugangspasswort',
+      bodyHtml: passwordEmailHtml,
+      emailType: 'secure_password',
+      sentBy,
+    });
+
+    if (pwResult.status === 'failed') {
+      console.error(`[SecureLink] Password email failed for ${emailTo}: ${pwResult.error}`);
+    }
 
     console.log(`[SecureLink] Created for lead ${leadId}: ${lead.documents.length} docs, expires ${expiresAt.toISOString()}`);
 
