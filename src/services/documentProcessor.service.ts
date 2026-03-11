@@ -164,32 +164,28 @@ async function uploadToGDrive(
 ) {
   if (!leadId) return;
 
-  try {
-    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
-    if (!lead?.googleDriveFolderId) {
-      console.log(`[GDrive] Lead ${leadId} has no folder — skipping`);
-      return;
-    }
-
-    const result = await uploadFileToCustomerFolder(
-      fileBuffer,
-      filename,
-      mimeType,
-      lead.googleDriveFolderId,
-    );
-
-    await prisma.document.update({
-      where: { id: documentId },
-      data: {
-        googleDriveId: result.fileId,
-        googleDriveUrl: result.webViewLink,
-      },
-    });
-
-    console.log(`[GDrive] ✅ ${filename} → ${lead.firstName} ${lead.lastName} folder`);
-  } catch (err: any) {
-    console.error(`[GDrive] ⚠️ Upload failed: ${err.message}`);
+  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+  if (!lead?.googleDriveFolderId) {
+    console.error(`[GDrive] Lead ${leadId} has no folder — skipping upload for ${filename}`);
+    return;
   }
+
+  const result = await uploadFileToCustomerFolder(
+    fileBuffer,
+    filename,
+    mimeType,
+    lead.googleDriveFolderId,
+  );
+
+  await prisma.document.update({
+    where: { id: documentId },
+    data: {
+      googleDriveId: result.fileId,
+      googleDriveUrl: result.webViewLink,
+    },
+  });
+
+  console.log(`[GDrive] ✅ ${filename} → ${lead.firstName} ${lead.lastName} folder`);
 }
 
 // ============================================================
@@ -366,6 +362,7 @@ async function processSingleAttachment(
         console.log(`[Processor] Created missing Drive folder for ${lead.firstName} ${lead.lastName}`);
       } catch (err: any) {
         console.error(`[Processor] ⚠️ Drive folder creation failed: ${err.message}`);
+        // Continue without Drive upload — document is still saved in DB
       }
     }
 
@@ -387,15 +384,17 @@ async function processSingleAttachment(
 
     // ── Upload to Google Drive ──
     const fileBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'base64');
-    uploadToGDrive(
-      fileBuffer,
-      filename,
-      mimeType,
-      customerMatch.leadId,
-      document.id,
-    ).catch((err) => {
+    try {
+      await uploadToGDrive(
+        fileBuffer,
+        filename,
+        mimeType,
+        customerMatch.leadId,
+        document.id,
+      );
+    } catch (err: any) {
       console.error(`[Processor] GDrive upload failed: ${err.message}`);
-    });
+    }
 
     // Pipedrive
     processDocumentInPipedrive({
