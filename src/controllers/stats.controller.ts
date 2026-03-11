@@ -193,7 +193,7 @@ export class StatsController {
       let ampelGreen = 0, ampelYellow = 0, ampelRed = 0;
       let tempHot = 0, tempWarm = 0, tempCold = 0;
 
-      const offeneKunden = meineKundenRaw
+      const alleKunden = meineKundenRaw
         .map((k) => {
           if (k.ampelStatus === 'GREEN') ampelGreen++;
           else if (k.ampelStatus === 'YELLOW') ampelYellow++;
@@ -227,8 +227,10 @@ export class StatsController {
             missingCount,
           };
         })
-        .filter((k) => k.missingCount > 0)
         .sort((a, b) => b.missingCount - a.missingCount);
+
+      // Backward compat: offeneKunden = nur die mit fehlenden Daten
+      const offeneKunden = alleKunden.filter((k) => k.missingCount > 0);
 
       // Top Leads nach Score (alle Leads, nicht nur eigene Kunden)
       const topLeads = await prisma.lead.findMany({
@@ -320,6 +322,7 @@ export class StatsController {
           letzteLeads,
         },
         offeneKunden,
+        alleKunden,
         meineAktivitaeten,
         aktivitaetenHeute,
         meineDeals,
