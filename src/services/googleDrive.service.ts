@@ -441,6 +441,10 @@ export async function deleteFile(fileId: string): Promise<void> {
   await drive.files.delete({ fileId });
 }
 
+export function resetClient() {
+  driveClient = null;
+}
+
 export async function checkConnection(): Promise<boolean> {
   try {
     const drive = getDrive();
@@ -449,6 +453,8 @@ export async function checkConnection(): Promise<boolean> {
     return true;
   } catch (err: any) {
     console.error(`[GDrive] ❌ Connection failed:`, err.message);
+    // Reset cached client so next call creates a fresh one
+    driveClient = null;
     return false;
   }
 }

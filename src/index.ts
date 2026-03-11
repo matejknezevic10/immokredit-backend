@@ -178,6 +178,23 @@ app.use('/api/jeffrey-ocr', authMiddleware, jeffreyOcrRoutes);
 app.use('/api/email', authMiddleware, emailRoutes);
 app.use('/api/signature', authMiddleware, signatureRoutes);
 
+// Google Drive connection check
+app.get('/api/gdrive/check', authMiddleware, async (req, res) => {
+  try {
+    const { checkConnection } = await import('./services/googleDrive.service');
+    const ok = await checkConnection();
+    const envStatus = {
+      clientId: !!process.env.GOOGLE_DRIVE_CLIENT_ID,
+      clientSecret: !!process.env.GOOGLE_DRIVE_CLIENT_SECRET,
+      refreshToken: !!process.env.GOOGLE_DRIVE_REFRESH_TOKEN,
+      folderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '(not set)',
+    };
+    res.json({ connected: ok, env: envStatus });
+  } catch (err: any) {
+    res.json({ connected: false, error: err.message });
+  }
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
