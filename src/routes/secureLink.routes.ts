@@ -188,15 +188,23 @@ router.get('/download/:documentId', async (req: Request, res: Response) => {
     auth.setCredentials({ refresh_token: refreshToken });
     const drive = google.drive({ version: 'v3', auth });
 
+    // Get actual file metadata from Google Drive (images may have been converted to PDF)
+    const fileMeta = await drive.files.get({
+      fileId: document.googleDriveId,
+      fields: 'name, mimeType',
+    });
+
+    const actualMimeType = fileMeta.data.mimeType || document.mimeType || 'application/octet-stream';
+    const actualFilename = fileMeta.data.name || document.originalFilename || 'download';
+
     const driveRes = await drive.files.get(
       { fileId: document.googleDriveId, alt: 'media' },
       { responseType: 'stream' },
     );
 
-    // Set headers for download
-    const filename = document.originalFilename || 'download';
-    res.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    // Set headers for download — use actual Drive file info (images are converted to PDF on upload)
+    res.setHeader('Content-Type', actualMimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(actualFilename)}"`);
 
     // Pipe Google Drive stream to response
     (driveRes.data as any).pipe(res);

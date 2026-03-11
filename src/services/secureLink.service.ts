@@ -337,6 +337,15 @@ export async function sendDocumentsAsAttachment(
     for (const doc of lead.documents) {
       try {
         console.log(`[SecureLink] Downloading ${doc.originalFilename} from GDrive...`);
+
+        // Get actual file metadata from Drive (images may have been converted to PDF)
+        const fileMeta = await drive.files.get({
+          fileId: doc.googleDriveId!,
+          fields: 'name, mimeType',
+        });
+        const actualFilename = fileMeta.data.name || doc.originalFilename || `${doc.type}.pdf`;
+        const actualMimeType = fileMeta.data.mimeType || doc.mimeType || 'application/pdf';
+
         const driveRes = await drive.files.get(
           { fileId: doc.googleDriveId!, alt: 'media' },
           { responseType: 'arraybuffer' },
@@ -346,17 +355,17 @@ export async function sendDocumentsAsAttachment(
         totalSize += buffer.length;
 
         if (totalSize > MAX_TOTAL_SIZE) {
-          console.warn(`[SecureLink] Skipping ${doc.originalFilename}: total size exceeds 25MB`);
+          console.warn(`[SecureLink] Skipping ${actualFilename}: total size exceeds 25MB`);
           continue;
         }
 
         attachments.push({
           content: buffer.toString('base64'),
-          filename: doc.originalFilename || `${doc.type}.pdf`,
-          type: doc.mimeType || 'application/pdf',
+          filename: actualFilename,
+          type: actualMimeType,
         });
 
-        console.log(`[SecureLink] Downloaded: ${doc.originalFilename} (${(buffer.length / 1024).toFixed(0)} KB)`);
+        console.log(`[SecureLink] Downloaded: ${actualFilename} (${(buffer.length / 1024).toFixed(0)} KB)`);
       } catch (err: any) {
         console.error(`[SecureLink] Failed to download ${doc.originalFilename}: ${err.message}`);
       }
