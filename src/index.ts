@@ -181,17 +181,25 @@ app.use('/api/signature', authMiddleware, signatureRoutes);
 // Google Drive connection check
 app.get('/api/gdrive/check', authMiddleware, async (req, res) => {
   try {
-    const { checkConnection } = await import('./services/googleDrive.service');
-    const ok = await checkConnection();
+    const { checkConnection, resetClient } = await import('./services/googleDrive.service');
+
+    // Reset cached client to force fresh OAuth2 token exchange
+    resetClient();
+
     const envStatus = {
       clientId: !!process.env.GOOGLE_DRIVE_CLIENT_ID,
       clientSecret: !!process.env.GOOGLE_DRIVE_CLIENT_SECRET,
       refreshToken: !!process.env.GOOGLE_DRIVE_REFRESH_TOKEN,
+      refreshTokenPreview: process.env.GOOGLE_DRIVE_REFRESH_TOKEN
+        ? `${process.env.GOOGLE_DRIVE_REFRESH_TOKEN.substring(0, 10)}...${process.env.GOOGLE_DRIVE_REFRESH_TOKEN.substring(process.env.GOOGLE_DRIVE_REFRESH_TOKEN.length - 6)}`
+        : '(not set)',
       folderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '(not set)',
     };
+
+    const ok = await checkConnection();
     res.json({ connected: ok, env: envStatus });
   } catch (err: any) {
-    res.json({ connected: false, error: err.message });
+    res.json({ connected: false, error: err.message, stack: err.stack?.split('\n').slice(0, 3) });
   }
 });
 

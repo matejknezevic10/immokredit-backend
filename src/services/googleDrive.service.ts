@@ -448,11 +448,13 @@ export function resetClient() {
 export async function checkConnection(): Promise<boolean> {
   try {
     const drive = getDrive();
+    console.log(`[GDrive] Testing connection to folder: ${FOLDER_ID}`);
     const res = await drive.files.get({ fileId: FOLDER_ID, fields: 'id, name' });
     console.log(`[GDrive] ✅ Connected: ${res.data.name}`);
     return true;
   } catch (err: any) {
-    console.error(`[GDrive] ❌ Connection failed:`, err.message);
+    const errDetail = err.response?.data?.error || err.message;
+    console.error(`[GDrive] ❌ Connection failed:`, JSON.stringify(errDetail));
     // Reset cached client so next call creates a fresh one
     driveClient = null;
     return false;
