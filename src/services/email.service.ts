@@ -59,6 +59,13 @@ function injectTrackingPixel(html: string, trackingId: string): string {
 // ============================================================
 // Email senden mit Tracking
 // ============================================================
+export interface EmailAttachment {
+  content: string;   // base64 encoded
+  filename: string;
+  type: string;      // MIME type
+  disposition?: 'attachment' | 'inline';
+}
+
 export interface SendEmailParams {
   leadId: string;
   to: string;
@@ -68,6 +75,7 @@ export interface SendEmailParams {
   sentBy?: string;     // User name
   fromEmail?: string;  // Per-user sender email (z.B. Office@tdfinance.at)
   fromName?: string;   // Per-user sender name (z.B. "Daniel Tunjic - TDFinance")
+  attachments?: EmailAttachment[];
 }
 
 export interface SendEmailResult {
@@ -77,7 +85,7 @@ export interface SendEmailResult {
 }
 
 export async function sendTrackedEmail(params: SendEmailParams): Promise<SendEmailResult> {
-  const { leadId, to, subject, bodyHtml, emailType = 'reminder', sentBy, fromEmail: userFromEmail, fromName: userFromName } = params;
+  const { leadId, to, subject, bodyHtml, emailType = 'reminder', sentBy, fromEmail: userFromEmail, fromName: userFromName, attachments } = params;
 
   // 1. Create tracking record first (to get ID for pixel)
   const tracking = await prisma.emailTracking.create({
@@ -101,12 +109,23 @@ export async function sendTrackedEmail(params: SendEmailParams): Promise<SendEma
     const fromEmail = userFromEmail || process.env.SENDGRID_FROM_EMAIL || 'info@immo-kredit.net';
     const fromName = userFromName || process.env.SENDGRID_FROM_NAME || 'ImmoKredit';
 
-    const [response] = await sg.send({
+    const msg: any = {
       to,
       from: { email: fromEmail, name: fromName },
       subject,
       html: htmlWithPixel,
-    });
+    };
+
+    if (attachments && attachments.length > 0) {
+      msg.attachments = attachments.map(a => ({
+        content: a.content,
+        filename: a.filename,
+        type: a.type,
+        disposition: a.disposition || 'attachment',
+      }));
+    }
+
+    const [response] = await sg.send(msg);
 
     // Store SendGrid message ID
     const messageId = response?.headers?.['x-message-id'] || null;

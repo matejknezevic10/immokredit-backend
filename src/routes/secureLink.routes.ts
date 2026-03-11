@@ -3,7 +3,7 @@
 // Routes für verschlüsselten Dokumenten-Download
 //
 import { Router, Request, Response } from 'express';
-import { createSecureDocumentLink, validateSecureLink, getSecureLinkDocuments } from '../services/secureLink.service';
+import { createSecureDocumentLink, validateSecureLink, getSecureLinkDocuments, sendDocumentsAsAttachment } from '../services/secureLink.service';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { google } from 'googleapis';
 import { PrismaClient } from '@prisma/client';
@@ -45,6 +45,42 @@ router.post('/create', authMiddleware, async (req: any, res: Response) => {
     });
   } catch (err: any) {
     console.error('[SecureLink Route] Create error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/secure-link/send-to-bank — Send documents as email attachments to bank (auth required)
+router.post('/send-to-bank', authMiddleware, async (req: any, res: Response) => {
+  try {
+    const { leadId, recipientEmail, recipientName } = req.body;
+
+    if (!leadId || !recipientEmail) {
+      return res.status(400).json({ error: 'leadId und recipientEmail erforderlich' });
+    }
+
+    const senderEmail = req.user?.email;
+    const senderName = req.user?.name;
+
+    const result = await sendDocumentsAsAttachment({
+      leadId,
+      recipientEmail,
+      recipientName,
+      sentBy: senderName,
+      fromEmail: senderEmail,
+      fromName: senderName,
+    });
+
+    if (!result.success) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    res.json({
+      success: true,
+      documentCount: result.documentCount,
+      message: `${result.documentCount} Dokumente an ${recipientEmail} gesendet`,
+    });
+  } catch (err: any) {
+    console.error('[SecureLink Route] Send-to-bank error:', err);
     res.status(500).json({ error: err.message });
   }
 });

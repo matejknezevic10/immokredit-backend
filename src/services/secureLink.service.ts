@@ -14,7 +14,8 @@
 
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
-import { sendTrackedEmail } from './email.service';
+import { sendTrackedEmail, EmailAttachment } from './email.service';
+import { google } from 'googleapis';
 
 const prisma = new PrismaClient();
 
@@ -266,6 +267,176 @@ export async function getSecureLinkDocuments(accessToken: string) {
       googleDriveUrl: true,
     },
   });
+}
+
+// ============================================================
+// Dokumente als Email-Anhang an Bank/Bankberater senden
+// Lädt die verarbeiteten PDFs aus Google Drive und schickt sie als Attachment
+// ============================================================
+export interface SendDocumentsParams {
+  leadId: string;
+  recipientEmail: string;
+  recipientName?: string;  // z.B. "Bankberater Sparkasse"
+  sentBy?: string;
+  fromEmail?: string;
+  fromName?: string;
+}
+
+export interface SendDocumentsResult {
+  success: boolean;
+  documentCount?: number;
+  error?: string;
+}
+
+export async function sendDocumentsAsAttachment(
+  params: SendDocumentsParams,
+): Promise<SendDocumentsResult> {
+  const { leadId, recipientEmail, recipientName, sentBy, fromEmail, fromName } = params;
+
+  try {
+    // 1. Load lead with documents
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      include: {
+        documents: {
+          where: { googleDriveId: { not: null } },
+          select: {
+            id: true,
+            originalFilename: true,
+            type: true,
+            mimeType: true,
+            googleDriveId: true,
+          },
+        },
+      },
+    });
+
+    if (!lead) return { success: false, error: 'Lead nicht gefunden' };
+    if (lead.documents.length === 0) {
+      return { success: false, error: 'Keine Dokumente zum Senden vorhanden' };
+    }
+
+    // 2. Setup Google Drive client
+    const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET;
+    const refreshToken = process.env.GOOGLE_DRIVE_REFRESH_TOKEN;
+
+    if (!clientId || !clientSecret || !refreshToken) {
+      return { success: false, error: 'Google Drive nicht konfiguriert' };
+    }
+
+    const auth = new google.auth.OAuth2(clientId, clientSecret);
+    auth.setCredentials({ refresh_token: refreshToken });
+    const drive = google.drive({ version: 'v3', auth });
+
+    // 3. Download each document from Google Drive
+    const attachments: EmailAttachment[] = [];
+    let totalSize = 0;
+    const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25MB SendGrid limit
+
+    for (const doc of lead.documents) {
+      try {
+        console.log(`[SecureLink] Downloading ${doc.originalFilename} from GDrive...`);
+        const driveRes = await drive.files.get(
+          { fileId: doc.googleDriveId!, alt: 'media' },
+          { responseType: 'arraybuffer' },
+        );
+
+        const buffer = Buffer.from(driveRes.data as ArrayBuffer);
+        totalSize += buffer.length;
+
+        if (totalSize > MAX_TOTAL_SIZE) {
+          console.warn(`[SecureLink] Skipping ${doc.originalFilename}: total size exceeds 25MB`);
+          continue;
+        }
+
+        attachments.push({
+          content: buffer.toString('base64'),
+          filename: doc.originalFilename || `${doc.type}.pdf`,
+          type: doc.mimeType || 'application/pdf',
+        });
+
+        console.log(`[SecureLink] Downloaded: ${doc.originalFilename} (${(buffer.length / 1024).toFixed(0)} KB)`);
+      } catch (err: any) {
+        console.error(`[SecureLink] Failed to download ${doc.originalFilename}: ${err.message}`);
+      }
+    }
+
+    if (attachments.length === 0) {
+      return { success: false, error: 'Keine Dokumente konnten heruntergeladen werden' };
+    }
+
+    // 4. Send email with attachments
+    const customerName = `${lead.firstName} ${lead.lastName}`;
+    const emailHtml = generateBankEmailHtml(customerName, attachments.length, recipientName);
+
+    const result = await sendTrackedEmail({
+      leadId,
+      to: recipientEmail,
+      subject: `ImmoKredit – Unterlagen ${customerName}`,
+      bodyHtml: emailHtml,
+      emailType: 'bank_documents',
+      sentBy,
+      fromEmail,
+      fromName,
+      attachments,
+    });
+
+    if (result.status === 'failed') {
+      return { success: false, error: `Email-Versand fehlgeschlagen: ${result.error}` };
+    }
+
+    // 5. Log activity
+    await prisma.activity.create({
+      data: {
+        leadId,
+        type: 'WORKFLOW_TRIGGERED',
+        title: 'Unterlagen an Bank gesendet',
+        description: `${attachments.length} Dokumente an ${recipientEmail} gesendet`,
+      },
+    });
+
+    console.log(`[SecureLink] Sent ${attachments.length} documents to ${recipientEmail} for ${customerName}`);
+
+    return { success: true, documentCount: attachments.length };
+  } catch (err: any) {
+    console.error('[SecureLink] SendDocuments error:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+function generateBankEmailHtml(customerName: string, docCount: number, recipientName?: string): string {
+  const greeting = recipientName ? `Sehr geehrte/r ${recipientName}` : 'Sehr geehrte Damen und Herren';
+
+  return `
+<div style="font-family: Arial, sans-serif; font-size: 15px; color: #333; line-height: 1.6; max-width: 600px;">
+  <div style="background: linear-gradient(135deg, #1e3a5f, #2563eb); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
+    <h1 style="color: white; margin: 0; font-size: 22px;">ImmoKredit</h1>
+    <p style="color: rgba(255,255,255,0.8); margin: 5px 0 0 0; font-size: 13px;">Finanzierungsunterlagen</p>
+  </div>
+
+  <div style="padding: 30px; background: #f8fafc; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 12px 12px;">
+    <p>${greeting},</p>
+
+    <p>anbei übersende ich Ihnen die Finanzierungsunterlagen für unseren Kunden <strong>${customerName}</strong>.</p>
+
+    <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 14px 18px; margin: 20px 0;">
+      <p style="margin: 0; font-size: 14px; color: #1e40af;">
+        📎 <strong>${docCount} Dokument${docCount !== 1 ? 'e' : ''}</strong> als Anhang beigefügt
+      </p>
+    </div>
+
+    <p>Bei Fragen oder benötigten Ergänzungen stehe ich Ihnen jederzeit gerne zur Verfügung.</p>
+
+    <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 25px 0;" />
+
+    <p style="font-size: 13px; color: #64748b;">
+      Mit freundlichen Grüßen<br/>
+      <strong>Ihr ImmoKredit Team</strong><br/>
+      +43 664 35 17 810 · info@immo-kredit.net
+    </p>
+  </div>
+</div>`;
 }
 
 // ============================================================
