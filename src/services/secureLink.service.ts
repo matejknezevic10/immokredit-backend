@@ -34,6 +34,8 @@ export interface CreateSecureLinkParams {
   recipientEmail?: string; // optional: custom recipient (default = lead.email)
   expiresInHours?: number; // default 72h
   sentBy?: string;
+  fromEmail?: string; // sender email (from logged-in user, e.g. slaven@immo-kredit.net)
+  fromName?: string;  // sender name (e.g. Slaven)
 }
 
 export interface CreateSecureLinkResult {
@@ -47,7 +49,7 @@ export interface CreateSecureLinkResult {
 export async function createSecureDocumentLink(
   params: CreateSecureLinkParams,
 ): Promise<CreateSecureLinkResult> {
-  const { leadId, recipientEmail, expiresInHours = 72, sentBy } = params;
+  const { leadId, recipientEmail, expiresInHours = 72, sentBy, fromEmail, fromName } = params;
 
   try {
     // 1. Load lead with documents
@@ -116,6 +118,8 @@ export async function createSecureDocumentLink(
       bodyHtml: linkEmailHtml,
       emailType: 'secure_link',
       sentBy,
+      fromEmail,
+      fromName,
     });
 
     if (linkResult.status === 'failed') {
@@ -131,6 +135,8 @@ export async function createSecureDocumentLink(
       bodyHtml: passwordEmailHtml,
       emailType: 'secure_password',
       sentBy,
+      fromEmail,
+      fromName,
     });
 
     if (pwResult.status === 'failed') {

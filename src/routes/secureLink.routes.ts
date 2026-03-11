@@ -9,15 +9,24 @@ import { authMiddleware } from '../middleware/auth.middleware';
 const router = Router();
 
 // POST /api/secure-link/create — Generate secure download link (auth required)
-router.post('/create', authMiddleware, async (req: Request, res: Response) => {
+router.post('/create', authMiddleware, async (req: any, res: Response) => {
   try {
-    const { leadId, recipientEmail, expiresInHours, sentBy } = req.body;
+    const { leadId, recipientEmail, expiresInHours } = req.body;
 
     if (!leadId) {
       return res.status(400).json({ error: 'leadId erforderlich' });
     }
 
-    const result = await createSecureDocumentLink({ leadId, recipientEmail, expiresInHours, sentBy });
+    // Use authenticated user as sender
+    const senderEmail = req.user?.email; // e.g. slaven@immo-kredit.net
+    const senderName = req.user?.name;   // e.g. Slaven
+
+    const result = await createSecureDocumentLink({
+      leadId, recipientEmail, expiresInHours,
+      sentBy: senderName,
+      fromEmail: senderEmail,
+      fromName: senderName,
+    });
 
     if (!result.success) {
       return res.status(500).json({ error: result.error });
