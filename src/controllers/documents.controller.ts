@@ -192,14 +192,18 @@ async function uploadToCustomerDrive(
   documentId: string,
   documentType?: string,
 ) {
-  if (!leadId) return;
+  if (!leadId) {
+    console.log(`[GDrive] No leadId — skipping upload for ${filename}`);
+    return;
+  }
 
   try {
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead?.googleDriveFolderId) {
-      console.log(`[GDrive] Lead ${leadId} has no folder — skipping upload`);
+      console.error(`[GDrive] ❌ Lead ${leadId} (${lead?.firstName} ${lead?.lastName}) has NO googleDriveFolderId — upload skipped for ${filename}`);
       return;
     }
+    console.log(`[GDrive] Uploading ${filename} to folder ${lead.googleDriveFolderId} for ${lead.firstName} ${lead.lastName}`);
 
     // Mix-Case name for filename: "MATEJ KNEŽEVIĆ" → "Matej Knežević"
     const customerName = `${capitalizeName(lead.firstName)} ${capitalizeName(lead.lastName)}`.trim();
@@ -727,14 +731,18 @@ class DocumentsController {
 
       // ── Upload to Google Drive (images will be auto-converted to PDF) ──
       if (customerMatch.leadId) {
-        uploadToCustomerDrive(
-          fileBuffer,
-          actualFilename,
-          actualMimeType,
-          customerMatch.leadId,
-          doc.id,
-          ocrResult.prismaType,  // e.g. "GEHALTSABRECHNUNG", "REISEPASS"
-        ).catch((err) => console.error(`[n8n-Upload] GDrive upload failed: ${err.message}`));
+        try {
+          await uploadToCustomerDrive(
+            fileBuffer,
+            actualFilename,
+            actualMimeType,
+            customerMatch.leadId,
+            doc.id,
+            ocrResult.prismaType,  // e.g. "GEHALTSABRECHNUNG", "REISEPASS"
+          );
+        } catch (err: any) {
+          console.error(`[n8n-Upload] GDrive upload failed: ${err.message}`);
+        }
       }
 
       // Activity log
