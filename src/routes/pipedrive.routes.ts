@@ -213,13 +213,27 @@ router.get('/deals', async (req: Request, res: Response) => {
       // Fetch real Lead data (ampelStatus, temperatur, score) for all matched leads
       const allLeadIds = Array.from(new Set(Array.from(leadIdMap.values())));
       const leadDataMap = new Map<string, { ampelStatus: string; temperatur: string; score: number }>();
+      const signatureMap = new Map<string, boolean>();
       if (allLeadIds.length > 0) {
-        const leadsData = await prisma.lead.findMany({
-          where: { id: { in: allLeadIds } },
-          select: { id: true, ampelStatus: true, temperatur: true, score: true },
-        });
+        const [leadsData, signatureDocs] = await Promise.all([
+          prisma.lead.findMany({
+            where: { id: { in: allLeadIds } },
+            select: { id: true, ampelStatus: true, temperatur: true, score: true },
+          }),
+          prisma.document.findMany({
+            where: {
+              leadId: { in: allLeadIds },
+              type: 'SONSTIGES',
+              extractedData: { path: ['signatureType'], equals: 'digital' },
+            },
+            select: { leadId: true },
+          }),
+        ]);
         for (const ld of leadsData) {
           leadDataMap.set(ld.id, { ampelStatus: ld.ampelStatus, temperatur: ld.temperatur, score: ld.score });
+        }
+        for (const sig of signatureDocs) {
+          signatureMap.set(sig.leadId, true);
         }
       }
 
@@ -229,6 +243,7 @@ router.get('/deals', async (req: Request, res: Response) => {
         return {
           ...d,
           leadId,
+          signatureSigned: leadId ? (signatureMap.get(leadId) || false) : false,
           lead: d.lead ? {
             ...d.lead,
             ampelStatus: leadData?.ampelStatus || d.lead.ampelStatus,
