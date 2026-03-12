@@ -34,6 +34,9 @@ router.put('/:leadId/finanzplan', kundeController.updateFinanzplan);
 // Kennzahlen (DSTI, LTV, Immowert)
 router.get('/:leadId/kennzahlen', kundeController.getKennzahlen);
 
+// Pflichtfelder-Check
+router.get('/:leadId/pflichtfelder', kundeController.getPflichtfelder);
+
 // Objekt (multiple)
 router.get('/:leadId/objekte', kundeController.getObjekte);
 router.post('/:leadId/objekte', kundeController.createObjekt);

@@ -565,4 +565,153 @@ export const kundeController = {
       res.status(500).json({ error: err.message });
     }
   },
+
+  // ── Pflichtfelder-Check ──
+  async getPflichtfelder(req: Request, res: Response) {
+    try {
+      const { leadId } = req.params;
+
+      const REQUIRED_PERSON = [
+        'land', 'geburtsdatum', 'geburtsland', 'geburtsort',
+        'staatsbuergerschaft', 'wohnart', 'wohnhaftSeit', 'steuerdomizil',
+        'familienstand', 'anzahlKinder', 'unterhaltsberechtigtePersonen',
+        'hoechsteAusbildung', 'anstellungsverhaeltnis',
+        'eigenesKfz', 'kontoverbindung',
+      ];
+
+      const REQUIRED_HAUSHALT = [
+        'betriebskostenMiete', 'energiekosten', 'telefonInternet', 'tvGebuehren',
+        'transportkosten', 'versicherungen', 'lebenshaltungskostenKreditbeteiligte',
+        'lebenshaltungskostenKinder', 'gesonderteAusgabenKinder',
+      ];
+
+      const REQUIRED_FINANZPLAN = [
+        'finanzierungszweck', 'kreditvermittlerprovision', 'schaetzgebuehr',
+      ];
+
+      const REQUIRED_OBJEKT = [
+        'objektTyp', 'geplanteVermietung', 'strasse', 'hausnummer', 'plz', 'ort',
+      ];
+
+      const PERSON_LABELS: Record<string, string> = {
+        land: 'Land', geburtsdatum: 'Geburtsdatum', geburtsland: 'Geburtsland',
+        geburtsort: 'Geburtsort', staatsbuergerschaft: 'Staatsbürgerschaft',
+        wohnart: 'Wohnart', wohnhaftSeit: 'Wohnhaft seit',
+        steuerdomizil: 'Steuerdomizil/e', familienstand: 'Familienstand',
+        anzahlKinder: 'Anzahl Kinder', unterhaltsberechtigtePersonen: 'Unterhaltsberechtigte Personen',
+        hoechsteAusbildung: 'Höchste abgeschlossene Ausbildung',
+        anstellungsverhaeltnis: 'Anstellungsverhältnis',
+        eigenesKfz: 'Eigenes KFZ vorhanden', kontoverbindung: 'Kontoverbindung',
+      };
+
+      const HAUSHALT_LABELS: Record<string, string> = {
+        betriebskostenMiete: 'Betriebskosten/Miete', energiekosten: 'Energiekosten',
+        telefonInternet: 'Telefon/Internet', tvGebuehren: 'TV-Gebühren',
+        transportkosten: 'Transportkosten', versicherungen: 'Versicherungen',
+        lebenshaltungskostenKreditbeteiligte: 'Lebenshaltungskosten Kreditbeteiligte',
+        lebenshaltungskostenKinder: 'Lebenshaltungskosten unterhaltsberechtigte Kinder',
+        gesonderteAusgabenKinder: 'Gesonderte Ausgaben Kinder',
+      };
+
+      const FINANZPLAN_LABELS: Record<string, string> = {
+        finanzierungszweck: 'Finanzierungszweck',
+        kreditvermittlerprovision: 'Kreditvermittlerprovision',
+        schaetzgebuehr: 'Schätzgebühr',
+      };
+
+      const OBJEKT_LABELS: Record<string, string> = {
+        objektTyp: 'Objekt', geplanteVermietung: 'Geplante Vermietung',
+        strasse: 'Straße', hausnummer: 'Hausnummer', plz: 'Postleitzahl', ort: 'Ort',
+      };
+
+      const isEmpty = (v: any) => v === null || v === undefined || v === '' || v === false;
+
+      // Fetch all data
+      const [personen, haushalt, finanzplan, objekte] = await Promise.all([
+        prisma.customerPerson.findMany({ where: { leadId }, orderBy: { personNumber: 'asc' } }),
+        prisma.customerHaushalt.findUnique({ where: { leadId } }),
+        prisma.customerFinanzplan.findUnique({ where: { leadId } }),
+        prisma.customerObjekt.findMany({ where: { leadId }, orderBy: { createdAt: 'asc' } }),
+      ]);
+
+      // Check person fields (for each person)
+      const personResults = personen.map((p: any) => {
+        const missing = REQUIRED_PERSON.filter(f => isEmpty(p[f]));
+        return {
+          personNumber: p.personNumber,
+          name: `${p.vorname || ''} ${p.nachname || ''}`.trim() || `Kreditnehmer ${p.personNumber}`,
+          complete: missing.length === 0,
+          missingFields: missing.map(f => ({ field: f, label: PERSON_LABELS[f] || f })),
+          totalRequired: REQUIRED_PERSON.length,
+          filledRequired: REQUIRED_PERSON.length - missing.length,
+        };
+      });
+
+      // Haushalt
+      const haushaltData = haushalt || {} as any;
+      // Check nettoverdienst in einkommen JSON
+      const einkommen = Array.isArray(haushaltData.einkommen) ? haushaltData.einkommen : [];
+      const hasNettoverdienst = einkommen.some((e: any) => e.nettoverdienst !== null && e.nettoverdienst !== undefined && e.nettoverdienst !== '');
+      const haushaltMissing = REQUIRED_HAUSHALT.filter(f => isEmpty(haushaltData[f]));
+      const haushaltResult = {
+        complete: haushaltMissing.length === 0 && hasNettoverdienst,
+        missingFields: [
+          ...(hasNettoverdienst ? [] : [{ field: 'nettoverdienst', label: 'Nettoverdienst p.M.' }]),
+          ...haushaltMissing.map(f => ({ field: f, label: HAUSHALT_LABELS[f] || f })),
+        ],
+        totalRequired: REQUIRED_HAUSHALT.length + 1,
+        filledRequired: (REQUIRED_HAUSHALT.length - haushaltMissing.length) + (hasNettoverdienst ? 1 : 0),
+      };
+
+      // Finanzplan
+      const fpData = finanzplan || {} as any;
+      const fpMissing = REQUIRED_FINANZPLAN.filter(f => isEmpty(fpData[f]));
+      // Check langfristiger Finanzierungsbedarf Brutto > 1000
+      const langfrBrutto = fpData.langfrFinanzierungsbedarfBrutto;
+      const hasLangfrBrutto = langfrBrutto !== null && langfrBrutto !== undefined && langfrBrutto !== '' && Number(langfrBrutto) >= 1000;
+      const finanzplanResult = {
+        complete: fpMissing.length === 0 && hasLangfrBrutto,
+        missingFields: [
+          ...fpMissing.map(f => ({ field: f, label: FINANZPLAN_LABELS[f] || f })),
+          ...(hasLangfrBrutto ? [] : [{ field: 'langfrFinanzierungsbedarfBrutto', label: 'Langfr. Finanzierungsbedarf Brutto muss > 1.000 € sein' }]),
+        ],
+        totalRequired: REQUIRED_FINANZPLAN.length + 1,
+        filledRequired: (REQUIRED_FINANZPLAN.length - fpMissing.length) + (hasLangfrBrutto ? 1 : 0),
+      };
+
+      // Objekte
+      const objektResults = objekte.length > 0 ? objekte.map((o: any, i: number) => {
+        const missing = REQUIRED_OBJEKT.filter(f => isEmpty(o[f]));
+        return {
+          objektNumber: i + 1,
+          complete: missing.length === 0,
+          missingFields: missing.map(f => ({ field: f, label: OBJEKT_LABELS[f] || f })),
+          totalRequired: REQUIRED_OBJEKT.length,
+          filledRequired: REQUIRED_OBJEKT.length - missing.length,
+        };
+      }) : [{
+        objektNumber: 1,
+        complete: false,
+        missingFields: REQUIRED_OBJEKT.map(f => ({ field: f, label: OBJEKT_LABELS[f] || f })),
+        totalRequired: REQUIRED_OBJEKT.length,
+        filledRequired: 0,
+      }];
+
+      res.json({
+        person: {
+          complete: personResults.length > 0 && personResults.every(p => p.complete),
+          personen: personResults,
+        },
+        haushalt: haushaltResult,
+        finanzplan: finanzplanResult,
+        objekt: {
+          complete: objektResults.every(o => o.complete),
+          objekte: objektResults,
+        },
+      });
+    } catch (err: any) {
+      console.error('[Kunde] getPflichtfelder error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  },
 };
