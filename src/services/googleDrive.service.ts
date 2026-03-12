@@ -53,13 +53,34 @@ function capitalizeName(name: string): string {
 // Numbered Customer Folder Creation
 // ============================================================
 
+// ============================================================
+// Get or create user-specific subfolder (Slaven/Roland/Daniel)
+// within the root "Finanzierung 2026" folder
+// ============================================================
+export async function getUserSubfolder(userName: string): Promise<string> {
+  const drive = getDrive();
+  return await getOrCreateSubfolderInParent(drive, FOLDER_ID, userName);
+}
+
 export async function createCustomerFolder(
   firstName: string,
   lastName: string,
   rootFolderId?: string,
+  assignedUserName?: string,
 ): Promise<{ folderId: string; folderUrl: string }> {
   const drive = getDrive();
-  const parentId = rootFolderId || FOLDER_ID;
+
+  // If an assigned user name is provided, create/find their subfolder first
+  let parentId = rootFolderId || FOLDER_ID;
+  if (assignedUserName && !rootFolderId) {
+    try {
+      parentId = await getOrCreateSubfolderInParent(drive, FOLDER_ID, assignedUserName);
+      console.log(`[GDrive] Using user subfolder: ${assignedUserName} (${parentId})`);
+    } catch (err: any) {
+      console.error(`[GDrive] Failed to get user subfolder for ${assignedUserName}, using root: ${err.message}`);
+      parentId = FOLDER_ID;
+    }
+  }
 
   // 1. List all existing folders to find highest number
   let allFolders: any[] = [];

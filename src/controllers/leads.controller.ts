@@ -236,6 +236,19 @@ export class LeadsController {
         },
       });
 
+      // Create Google Drive folder in user's subfolder (async, don't block)
+      createCustomerFolder(lead.firstName, lead.lastName, undefined, userName.split(' ')[0])
+        .then(async ({ folderId, folderUrl }) => {
+          await prisma.lead.update({
+            where: { id },
+            data: { googleDriveFolderId: folderId, googleDriveFolderUrl: folderUrl },
+          });
+          console.log(`[Leads] ✅ Drive folder for Eigenkunde: ${folderUrl}`);
+        })
+        .catch((err) => {
+          console.error(`[Leads] ⚠️ Drive folder failed: ${err.message}`);
+        });
+
       console.log(`[Leads] ✅ ${lead.firstName} ${lead.lastName} → Eigenkunde von ${userName}`);
       res.json(updated);
     } catch (error: any) {
