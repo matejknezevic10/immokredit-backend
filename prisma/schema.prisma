@@ -61,7 +61,7 @@ model Lead {
   documents              Document[]
 
   // Kunde relations
-  person     CustomerPerson?
+  personen   CustomerPerson[]
   haushalt   CustomerHaushalt?
   finanzplan CustomerFinanzplan?
   objekte    CustomerObjekt[]
@@ -98,9 +98,10 @@ model Deal {
 // KUNDE: Person
 // ============================================================
 model CustomerPerson {
-  id     String @id @default(uuid())
-  leadId String @unique
-  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  id           String @id @default(uuid())
+  leadId       String
+  lead         Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  personNumber Int    @default(1) // 1 = Hauptkreditnehmer, 2-5 = weitere
 
   // Finanzierungsmappe
   berater               String?
@@ -181,6 +182,7 @@ model CustomerPerson {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([leadId, personNumber])
   @@index([leadId])
 }
 

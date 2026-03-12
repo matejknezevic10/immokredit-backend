@@ -13,9 +13,15 @@ router.get('/archiv', kundeController.getArchived);
 // Kunde Overview (alle 4 Sparten)
 router.get('/:leadId', kundeController.getOverview);
 
-// Person
+// Personen (multiple, up to 5)
+router.get('/:leadId/personen', kundeController.getPersonen);
+router.post('/:leadId/personen', kundeController.createPerson);
+router.put('/person/:personId', kundeController.updatePerson);
+router.delete('/person/:personId', kundeController.deletePerson);
+
+// Backward compat: single person endpoints
 router.get('/:leadId/person', kundeController.getPerson);
-router.put('/:leadId/person', kundeController.updatePerson);
+router.put('/:leadId/person', kundeController.updatePersonLegacy);
 
 // Haushalt
 router.get('/:leadId/haushalt', kundeController.getHaushalt);

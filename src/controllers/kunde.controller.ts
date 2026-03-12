@@ -120,7 +120,7 @@ export const kundeController = {
           createdAt: true,
           assignedAt: true,
           completionFlags: true,
-          person: { select: { id: true } },
+          personen: { select: { id: true } },
           haushalt: { select: { id: true } },
           finanzplan: { select: { id: true } },
           objekte: { select: { id: true } },
@@ -140,7 +140,7 @@ export const kundeController = {
           temperatur: k.temperatur,
           createdAt: k.createdAt,
           assignedAt: k.assignedAt,
-          hasPersonData: flags?.person ?? !!k.person,
+          hasPersonData: flags?.person ?? (k as any).personen?.length > 0,
           hasHaushaltData: flags?.haushalt ?? !!k.haushalt,
           hasFinanzplanData: flags?.finanzplan ?? !!k.finanzplan,
           objekteCount: flags?.objekt !== undefined ? (flags.objekt ? 1 : 0) : k.objekte.length,
@@ -194,7 +194,7 @@ export const kundeController = {
       const lead = await prisma.lead.findUnique({
         where: { id: leadId },
         include: {
-          person: true,
+          personen: { orderBy: { personNumber: 'asc' } },
           haushalt: true,
           finanzplan: true,
           objekte: true,
@@ -202,7 +202,9 @@ export const kundeController = {
         },
       });
       if (!lead) return res.status(404).json({ error: 'Lead nicht gefunden' });
-      res.json(lead);
+      // Backward compat: also provide `person` as the first person
+      const result: any = { ...lead, person: (lead as any).personen?.[0] || null };
+      res.json(result);
     } catch (err: any) {
       console.error('[Kunde] getOverview error:', err);
       res.status(500).json({ error: err.message });
@@ -210,19 +212,56 @@ export const kundeController = {
   },
 
   // ══════════════════════════════════════════
-  // PERSON
+  // PERSONEN (multiple per lead, up to 5)
   // ══════════════════════════════════════════
+
+  /** GET /:leadId/personen — all persons for this lead */
+  async getPersonen(req: Request, res: Response) {
+    try {
+      const { leadId } = req.params;
+      let personen = await prisma.customerPerson.findMany({
+        where: { leadId },
+        orderBy: { personNumber: 'asc' },
+      });
+
+      // Auto-create first person from lead data if none exists
+      if (personen.length === 0) {
+        const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+        if (!lead) return res.status(404).json({ error: 'Lead nicht gefunden' });
+        const first = await prisma.customerPerson.create({
+          data: {
+            leadId,
+            personNumber: 1,
+            vorname: lead.firstName,
+            nachname: lead.lastName,
+            email: lead.email,
+            mobilnummer: lead.phone,
+          },
+        });
+        personen = [first];
+      }
+
+      res.json(personen);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /** GET /:leadId/person — backward compat: returns first person */
   async getPerson(req: Request, res: Response) {
     try {
       const { leadId } = req.params;
-      let person = await prisma.customerPerson.findUnique({ where: { leadId } });
+      let person = await prisma.customerPerson.findFirst({
+        where: { leadId },
+        orderBy: { personNumber: 'asc' },
+      });
       if (!person) {
-        // Auto-create from lead data
         const lead = await prisma.lead.findUnique({ where: { id: leadId } });
         if (!lead) return res.status(404).json({ error: 'Lead nicht gefunden' });
         person = await prisma.customerPerson.create({
           data: {
             leadId,
+            personNumber: 1,
             vorname: lead.firstName,
             nachname: lead.lastName,
             email: lead.email,
@@ -236,20 +275,86 @@ export const kundeController = {
     }
   },
 
-  async updatePerson(req: Request, res: Response) {
+  /** POST /:leadId/personen — create a new person */
+  async createPerson(req: Request, res: Response) {
     try {
       const { leadId } = req.params;
       const data = pickFields(req.body, PERSON_FIELDS);
-      const existing = await prisma.customerPerson.findUnique({ where: { leadId } });
-      let person;
-      if (existing) {
-        person = await prisma.customerPerson.update({ where: { leadId }, data });
-      } else {
-        person = await prisma.customerPerson.create({ data: { leadId, ...data } });
+
+      // Find next available personNumber
+      const existing = await prisma.customerPerson.findMany({
+        where: { leadId },
+        select: { personNumber: true },
+        orderBy: { personNumber: 'desc' },
+      });
+
+      const maxNum = existing.length > 0 ? existing[0].personNumber : 0;
+      if (maxNum >= 5) {
+        return res.status(400).json({ error: 'Maximal 5 Kreditnehmer erlaubt' });
       }
+
+      const person = await prisma.customerPerson.create({
+        data: { leadId, personNumber: maxNum + 1, ...data },
+      });
+
+      res.json(person);
+    } catch (err: any) {
+      console.error('[Kunde] createPerson error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /** PUT /person/:personId — update a specific person by ID */
+  async updatePerson(req: Request, res: Response) {
+    try {
+      const { personId } = req.params;
+      const data = pickFields(req.body, PERSON_FIELDS);
+      const person = await prisma.customerPerson.update({
+        where: { id: personId },
+        data,
+      });
       res.json(person);
     } catch (err: any) {
       console.error('[Kunde] updatePerson error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /** PUT /:leadId/person — backward compat: update first person (upsert) */
+  async updatePersonLegacy(req: Request, res: Response) {
+    try {
+      const { leadId } = req.params;
+      const data = pickFields(req.body, PERSON_FIELDS);
+      const existing = await prisma.customerPerson.findFirst({
+        where: { leadId },
+        orderBy: { personNumber: 'asc' },
+      });
+      let person;
+      if (existing) {
+        person = await prisma.customerPerson.update({ where: { id: existing.id }, data });
+      } else {
+        person = await prisma.customerPerson.create({ data: { leadId, personNumber: 1, ...data } });
+      }
+      res.json(person);
+    } catch (err: any) {
+      console.error('[Kunde] updatePersonLegacy error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /** DELETE /person/:personId — delete a specific person */
+  async deletePerson(req: Request, res: Response) {
+    try {
+      const { personId } = req.params;
+      // Don't allow deleting the last person (personNumber 1)
+      const person = await prisma.customerPerson.findUnique({ where: { id: personId } });
+      if (!person) return res.status(404).json({ error: 'Person nicht gefunden' });
+      if (person.personNumber === 1) {
+        return res.status(400).json({ error: 'Hauptkreditnehmer kann nicht gelöscht werden' });
+      }
+      await prisma.customerPerson.delete({ where: { id: personId } });
+      res.json({ success: true });
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   },

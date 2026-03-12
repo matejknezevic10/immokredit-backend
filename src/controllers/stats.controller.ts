@@ -138,7 +138,7 @@ export class StatsController {
             lastName: true,
             ampelStatus: true,
             temperatur: true,
-            person: { select: { id: true } },
+            personen: { select: { id: true } },
             haushalt: { select: { id: true } },
             finanzplan: { select: { id: true } },
             objekte: { select: { id: true } },
@@ -203,7 +203,7 @@ export class StatsController {
           else if (k.temperatur === 'WARM') tempWarm++;
           else tempCold++;
 
-          const hasPersonData = !!k.person;
+          const hasPersonData = (k as any).personen?.length > 0;
           const hasHaushaltData = !!k.haushalt;
           const hasFinanzplanData = !!k.finanzplan;
           const objekteCount = k.objekte.length;

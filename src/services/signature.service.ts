@@ -41,7 +41,7 @@ export async function saveSignature(params: SaveSignatureParams): Promise<SaveSi
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
       include: {
-        person: true,
+        personen: true,
         deal: true,
         finanzplan: true,
       },

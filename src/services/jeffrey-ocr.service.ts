@@ -538,15 +538,15 @@ async function saveExtractedData(leadId: string, result: ExtractionResult): Prom
   if (fields.person && Object.keys(fields.person).length > 0) {
     const data = sanitizePersonFields(fields.person);
     if (Object.keys(data).length > 0) {
-      const existing = await prisma.customerPerson.findUnique({ where: { leadId } });
+      const existing = await prisma.customerPerson.findFirst({ where: { leadId }, orderBy: { personNumber: 'asc' } });
       if (existing) {
         const updates = getEmptyFieldUpdates(existing, data);
         if (Object.keys(updates).length > 0) {
-          await prisma.customerPerson.update({ where: { leadId }, data: updates });
+          await prisma.customerPerson.update({ where: { id: existing.id }, data: updates });
           sectionsUpdated.push(`Person (${Object.keys(updates).length} Felder)`);
         }
       } else {
-        await prisma.customerPerson.create({ data: { leadId, ...data } });
+        await prisma.customerPerson.create({ data: { leadId, personNumber: 1, ...data } });
         sectionsUpdated.push(`Person (${Object.keys(data).length} Felder)`);
       }
     }
