@@ -151,16 +151,21 @@ export async function berechneKennzahlen(leadId: string): Promise<Kennzahlen> {
 // DSTI Calculation
 // ============================================================
 function berechneDSTI(haushalt: any, finanzplan: any): Pick<Kennzahlen, 'dsti' | 'dstiProzent' | 'dstiBewertung' | 'dstiDetails'> {
-  // Monatliches Nettoeinkommen
-  let monatlichesNettoeinkommen: number | null = null;
+  // Monatliches Nettoeinkommen (Nettolohn)
+  let nettolohn: number | null = null;
 
   if (haushalt?.summeEinnahmen) {
-    monatlichesNettoeinkommen = haushalt.summeEinnahmen;
+    nettolohn = haushalt.summeEinnahmen;
   } else if (haushalt?.einkommen && Array.isArray(haushalt.einkommen)) {
-    monatlichesNettoeinkommen = (haushalt.einkommen as any[]).reduce(
+    nettolohn = (haushalt.einkommen as any[]).reduce(
       (sum: number, e: any) => sum + (e.nettoverdienst || 0), 0
     );
   }
+
+  // Formel: Nettolohn * 14/12 * 40% = maximaler Kreditbetrag
+  // DSTI = Kreditrate / (Nettolohn * 14/12)
+  // Max DSTI = 40%
+  const monatlichesNettoeinkommen = nettolohn ? Math.round(nettolohn * 14 / 12 * 100) / 100 : null;
 
   // Monatliche Kreditrate
   let monatlicheKreditrate: number | null = haushalt?.zumutbareKreditrate || null;
@@ -176,7 +181,7 @@ function berechneDSTI(haushalt: any, finanzplan: any): Pick<Kennzahlen, 'dsti' |
   // Total debt service
   const gesamtBelastung = (monatlicheKreditrate || 0) + (bestandskrediteRate || 0);
 
-  // DSTI
+  // DSTI: Kreditrate / (Nettolohn * 14/12), max 40% = gut
   let dsti: number | null = null;
   let dstiProzent: number | null = null;
   let dstiBewertung: Kennzahlen['dstiBewertung'] = 'unvollständig';
@@ -186,7 +191,7 @@ function berechneDSTI(haushalt: any, finanzplan: any): Pick<Kennzahlen, 'dsti' |
     dstiProzent = Math.round(dsti * 100 * 10) / 10; // 1 decimal place
 
     if (dsti <= 0.35) dstiBewertung = 'gut';
-    else if (dsti <= 0.45) dstiBewertung = 'akzeptabel';
+    else if (dsti <= 0.40) dstiBewertung = 'akzeptabel';
     else dstiBewertung = 'kritisch';
   }
 
@@ -229,9 +234,10 @@ function berechneLTV(finanzplan: any, immobilienwert: number | null): Pick<Kennz
       eigenmittelQuote = Math.round((finanzplan.summeEigenmittel / immobilienwert) * 100 * 10) / 10;
     }
 
+    // LTV: Kreditbetrag / Hauswert, max 90%
     if (ltv <= 0.80) ltvBewertung = 'gut';
     else if (ltv <= 0.90) ltvBewertung = 'akzeptabel';
-    else ltvBewertung = 'kritisch';
+    else ltvBewertung = 'kritisch';  // > 90% ist kritisch
   }
 
   return {
