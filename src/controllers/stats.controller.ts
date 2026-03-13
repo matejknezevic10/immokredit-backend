@@ -358,6 +358,141 @@ export class StatsController {
       res.status(500).json({ error: error.message });
     }
   }
+
+  // GET /api/stats/lead-statistik — Comprehensive lead stats for charts + Excel export
+  async getLeadStatistik(req: Request, res: Response) {
+    try {
+      // Fetch all leads (non-deleted)
+      const allLeads = await prisma.lead.findMany({
+        where: { deletedAt: null },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          source: true,
+          amount: true,
+          ampelStatus: true,
+          temperatur: true,
+          score: true,
+          isKunde: true,
+          assignedTo: { select: { name: true } },
+          createdAt: true,
+          assignedAt: true,
+          archivedAt: true,
+          deal: { select: { stage: true, value: true, title: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // ── Leads pro Monat (letzte 12 Monate) ──
+      const now = new Date();
+      const months: { month: string; leads: number; kunden: number }[] = [];
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const monthLabel = d.toLocaleDateString('de-AT', { month: 'short', year: '2-digit' });
+        const nextMonth = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+        const leadsInMonth = allLeads.filter(l => new Date(l.createdAt) >= d && new Date(l.createdAt) < nextMonth);
+        months.push({
+          month: monthLabel,
+          leads: leadsInMonth.filter(l => !l.isKunde).length,
+          kunden: leadsInMonth.filter(l => l.isKunde).length,
+        });
+      }
+
+      // ── Quelle/Source Verteilung ──
+      const sourceCounts: Record<string, number> = {};
+      for (const l of allLeads) {
+        const src = l.source || 'Unbekannt';
+        sourceCounts[src] = (sourceCounts[src] || 0) + 1;
+      }
+      const sourceVerteilung = Object.entries(sourceCounts)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value);
+
+      // ── Ampel-Verteilung ──
+      const ampelVerteilung = [
+        { name: 'Grün', value: allLeads.filter(l => l.ampelStatus === 'GREEN').length, color: '#10b981' },
+        { name: 'Gelb', value: allLeads.filter(l => l.ampelStatus === 'YELLOW').length, color: '#f59e0b' },
+        { name: 'Rot', value: allLeads.filter(l => l.ampelStatus === 'RED').length, color: '#ef4444' },
+      ];
+
+      // ── Temperatur-Verteilung ──
+      const temperaturVerteilung = [
+        { name: 'Hot', value: allLeads.filter(l => l.temperatur === 'HOT').length, color: '#ef4444' },
+        { name: 'Warm', value: allLeads.filter(l => l.temperatur === 'WARM').length, color: '#f59e0b' },
+        { name: 'Cold', value: allLeads.filter(l => l.temperatur === 'COLD').length, color: '#3b82f6' },
+      ];
+
+      // ── Zuständiger Verteilung ──
+      const zustaendigCounts: Record<string, number> = {};
+      for (const l of allLeads) {
+        const name = l.assignedTo?.name || 'Nicht zugewiesen';
+        zustaendigCounts[name] = (zustaendigCounts[name] || 0) + 1;
+      }
+      const zustaendigVerteilung = Object.entries(zustaendigCounts)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value);
+
+      // ── Konversionsrate ──
+      const totalLeads = allLeads.length;
+      const totalKunden = allLeads.filter(l => l.isKunde).length;
+      const konversionsrate = totalLeads > 0 ? Math.round((totalKunden / totalLeads) * 100 * 10) / 10 : 0;
+
+      // ── Deal-Stage Verteilung (nur Kunden mit Deal) ──
+      const stageCounts: Record<string, number> = {};
+      for (const l of allLeads) {
+        if (l.deal) {
+          const stage = l.deal.stage || 'NEUER_LEAD';
+          stageCounts[stage] = (stageCounts[stage] || 0) + 1;
+        }
+      }
+      const stageVerteilung = Object.entries(stageCounts)
+        .map(([name, value]) => ({ name, value }));
+
+      // ── Excel-Export Daten (flache Tabelle) ──
+      const excelData = allLeads.map(l => ({
+        Vorname: l.firstName,
+        Nachname: l.lastName,
+        Email: l.email,
+        Telefon: l.phone,
+        Quelle: l.source || '',
+        Betrag: l.amount || 0,
+        Ampel: l.ampelStatus,
+        Temperatur: l.temperatur,
+        Score: l.score,
+        Typ: l.isKunde ? 'Eigenkunde' : 'Lead',
+        Zustaendiger: l.assignedTo?.name || '',
+        DealStage: l.deal?.stage || '',
+        DealWert: l.deal?.value || 0,
+        ErstelltAm: new Date(l.createdAt).toLocaleDateString('de-AT'),
+        Archiviert: l.archivedAt ? 'Ja' : 'Nein',
+      }));
+
+      res.json({
+        summary: {
+          totalLeads: allLeads.filter(l => !l.isKunde).length,
+          totalKunden: totalKunden,
+          totalGesamt: totalLeads,
+          konversionsrate,
+        },
+        charts: {
+          monatlich: months,
+          sourceVerteilung,
+          ampelVerteilung,
+          temperaturVerteilung,
+          zustaendigVerteilung,
+          stageVerteilung,
+        },
+        excelData,
+      });
+    } catch (error: any) {
+      console.error('StatsController.getLeadStatistik error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
 }
 
 export const statsController = new StatsController();

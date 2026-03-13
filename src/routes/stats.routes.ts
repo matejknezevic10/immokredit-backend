@@ -13,4 +13,7 @@ router.get('/my-dashboard', (req, res) => statsController.getMyDashboard(req, re
 // GET /api/stats/activities
 router.get('/activities', (req, res) => statsController.getActivities(req, res));
 
+// GET /api/stats/lead-statistik
+router.get('/lead-statistik', (req, res) => statsController.getLeadStatistik(req, res));
+
 export default router;
