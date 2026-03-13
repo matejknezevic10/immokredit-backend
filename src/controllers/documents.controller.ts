@@ -435,7 +435,7 @@ class DocumentsController {
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      const results = [];
+      const results: any[] = [];
 
       for (const file of files) {
         try {

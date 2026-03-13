@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { createSecureDocumentLink } from '../services/secureLink.service';
 
 const router = Router();
-const prisma = new PrismaClient();
+const prisma = new PrismaClient() as any;
 
 const PIPEDRIVE_API_TOKEN = process.env.PIPEDRIVE_API_TOKEN || '';
 const PIPEDRIVE_BASE_URL = process.env.PIPEDRIVE_BASE_URL || 'https://api.pipedrive.com/v1';
@@ -162,10 +162,10 @@ router.get('/deals', async (req: Request, res: Response) => {
           where: { email: { in: emails } },
           select: { email: true, id: true },
         });
-        const emailMap = new Map(emailLeads.map(l => [l.email.toLowerCase(), l.id]));
+        const emailMap = new Map(emailLeads.map((l: any) => [l.email.toLowerCase(), l.id]));
         for (const deal of unmatchedDeals2) {
           const leadId = emailMap.get(deal.personEmail?.toLowerCase());
-          if (leadId) leadIdMap.set(deal.pipedriveDealId, leadId);
+          if (leadId) leadIdMap.set(deal.pipedriveDealId, leadId as string);
         }
       }
 

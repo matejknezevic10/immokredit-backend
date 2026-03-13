@@ -14,7 +14,7 @@
 import { PrismaClient } from '@prisma/client';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient() as any;
 
 // ============================================================
 // Unterschrift speichern

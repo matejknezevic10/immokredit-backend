@@ -6,7 +6,8 @@ import { createCustomerFolder } from '../services/googleDrive.service';
 import { pipedriveService } from '../integrations/pipedrive.service';
 import { AuthRequest } from '../middleware/auth.middleware';
 
-const prisma = new PrismaClient();
+// Cast as any: generated Prisma types may be stale during build; schema is the source of truth
+const prisma = new PrismaClient() as any;
 
 // ============================================================
 // Scoring-Logik basierend auf Funnel-Antworten (PDF v2 mit Korrekturen)

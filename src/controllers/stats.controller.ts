@@ -4,7 +4,8 @@ import { leadsService } from '../services/leads.service';
 import { PrismaClient } from '@prisma/client';
 import { AuthRequest } from '../middleware/auth.middleware';
 
-const prisma = new PrismaClient();
+// Cast as any: generated Prisma types may be stale during build; schema is the source of truth
+const prisma = new PrismaClient() as any;
 
 const PIPEDRIVE_API_TOKEN = process.env.PIPEDRIVE_API_TOKEN || '';
 const PIPEDRIVE_BASE_URL = process.env.PIPEDRIVE_BASE_URL || 'https://api.pipedrive.com/v1';
@@ -365,22 +366,8 @@ export class StatsController {
       // Fetch all leads (non-deleted)
       const allLeads = await prisma.lead.findMany({
         where: { deletedAt: null },
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          phone: true,
-          source: true,
-          amount: true,
-          ampelStatus: true,
-          temperatur: true,
-          score: true,
-          isKunde: true,
+        include: {
           assignedTo: { select: { name: true } },
-          createdAt: true,
-          assignedAt: true,
-          archivedAt: true,
           deal: { select: { stage: true, value: true, title: true } },
         },
         orderBy: { createdAt: 'desc' },

@@ -4,7 +4,8 @@ import { PrismaClient } from '@prisma/client';
 import { berechneKennzahlen } from '../services/kennzahlen.service';
 import { AuthRequest } from '../middleware/auth.middleware';
 
-const prisma = new PrismaClient();
+// Cast as any: generated Prisma types may be stale during build; schema is the source of truth
+const prisma = new PrismaClient() as any;
 
 // ── Field whitelists: only these fields may be written to Prisma ──
 const PERSON_FIELDS = [

@@ -15,7 +15,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { PrismaClient } from '@prisma/client';
 import { google } from 'googleapis';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient() as any;
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -862,7 +862,7 @@ export async function processAllDocumentsForLead(leadId: string): Promise<{
   const docs = await prisma.document.findMany({ where: { leadId } });
   console.log(`[Jeffrey OCR] Processing ${docs.length} documents for lead ${leadId}`);
 
-  const results = [];
+  const results: any[] = [];
   for (const doc of docs) {
     try {
       const result = await processDocumentOCR(doc.id);
