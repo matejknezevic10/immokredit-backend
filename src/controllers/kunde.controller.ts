@@ -69,7 +69,7 @@ const OBJEKT_FIELDS = [
 ];
 
 // Fields that are DateTime in Prisma schema — need ISO conversion
-const DATETIME_FIELDS = new Set(['baubeginn', 'bauende', 'geburtsdatum']);
+const DATETIME_FIELDS = new Set(['baubeginn', 'bauende', 'geburtsdatum', 'wohnhaftSeit', 'beschaeftigtSeit', 'garantieTermin']);
 
 /** Pick only whitelisted fields from body, converting empty strings to null and fixing types */
 function pickFields(body: any, allowed: string[]): Record<string, any> {
