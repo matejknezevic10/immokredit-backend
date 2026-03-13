@@ -76,10 +76,10 @@ const authLimiter = rateLimit({
   message: { error: 'Zu viele Login-Versuche. Bitte in 15 Minuten erneut versuchen.' },
 });
 
-// Strict: Public form submit — 10 per 15 minutes per IP
+// Public form submit — 100 per 15 minutes per IP (raised for paid ads campaigns)
 const funnelLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Zu viele Anfragen. Bitte später erneut versuchen.' },

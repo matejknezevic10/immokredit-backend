@@ -5,8 +5,7 @@ import { createCustomerFolder } from '../services/googleDrive.service';
 
 const router = Router();
 
-// POST /api/leads/onepage-funnel — MUST be before /:id to avoid conflict
-router.post('/onepage-funnel', (req, res) => leadsController.onepageFunnel(req, res));
+// NOTE: POST /api/leads/onepage-funnel is registered as public route in index.ts (no auth required)
 
 // POST /api/leads/:id/convert-to-eigenkunde — MUST be before /:id to avoid conflict
 router.post('/:id/convert-to-eigenkunde', (req, res) => leadsController.convertToEigenkunde(req, res));
