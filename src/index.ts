@@ -24,6 +24,7 @@ import emailRoutes from './routes/email.routes';
 import voiceAgentRoutes from './routes/voiceAgent.routes';
 import signatureRoutes, { publicSignatureRouter } from './routes/signature.routes';
 import secureLinkRoutes from './routes/secureLink.routes';
+import stellungnahmeRoutes from './routes/stellungnahme.routes';
 
 // Load environment variables
 dotenv.config();
@@ -177,6 +178,7 @@ app.use('/api/kunde', authMiddleware, kundeRoutes);
 app.use('/api/jeffrey-ocr', authMiddleware, jeffreyOcrRoutes);
 app.use('/api/email', authMiddleware, emailRoutes);
 app.use('/api/signature', authMiddleware, signatureRoutes);
+app.use('/api/stellungnahme', authMiddleware, stellungnahmeRoutes);
 
 // Google Drive connection check
 app.get('/api/gdrive/check', authMiddleware, async (req, res) => {
