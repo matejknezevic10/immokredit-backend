@@ -57,10 +57,10 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ── Rate Limiting ──
-// Global: 200 requests per 15 minutes per IP
+// Global: 1500 requests per 15 minutes per IP (each page load triggers ~6 API calls)
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 1500,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Zu viele Anfragen. Bitte später erneut versuchen.' },
