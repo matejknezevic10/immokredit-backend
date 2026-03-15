@@ -14,6 +14,40 @@ const prisma = new PrismaClient() as any;
 // 6 von 10 Fragen fließen in den Score ein.
 // Max Rohpunkte = 123, normalisiert auf 100.
 // ============================================================
+// Normalisiert einen String für robusten Vergleich:
+// - Unicode NFC normalisieren
+// - Alle Dash-Varianten (en-dash, em-dash) → normaler Bindestrich
+// - Trimmen
+function normalizeForCompare(s: string): string {
+  return s
+    .normalize('NFC')
+    .replace(/[\u2013\u2014]/g, '-')  // en-dash, em-dash → hyphen
+    .replace(/\u20AC/g, '\u20AC')     // keep euro sign consistent
+    .trim();
+}
+
+// Sucht einen Wert in einer Map mit Normalisierung beider Seiten
+function findInMap(value: string, map: Record<string, number>, fallback: number): number {
+  const normalized = normalizeForCompare(value);
+  // Zuerst: direkter Lookup
+  if (map[value] !== undefined) return map[value];
+  // Dann: normalisierter Lookup
+  for (const [key, score] of Object.entries(map)) {
+    if (normalizeForCompare(key) === normalized) return score;
+  }
+  // Fallback: Zahlen-basiertes Matching (extrahiert die erste Zahl aus dem String)
+  const numMatch = normalized.replace(/\./g, '').match(/(\d+)/);
+  if (numMatch) {
+    const num = parseInt(numMatch[1], 10);
+    for (const [key, score] of Object.entries(map)) {
+      const keyNum = normalizeForCompare(key).replace(/\./g, '').match(/(\d+)/);
+      if (keyNum && parseInt(keyNum[1], 10) === num) return score;
+    }
+  }
+  console.log(`[Scoring] No match for "${value}" (normalized: "${normalized}") in map keys: ${Object.keys(map).join(', ')}`);
+  return fallback;
+}
+
 function calculateScoreFromFunnelAnswers(funnelAnswers: any): { score: number; temperatur: Temperatur; ampelStatus: AmpelStatus } {
   if (!funnelAnswers) return { score: 0, temperatur: Temperatur.WARM, ampelStatus: AmpelStatus.YELLOW };
 
@@ -42,39 +76,36 @@ function calculateScoreFromFunnelAnswers(funnelAnswers: any): { score: number; t
   }
 
   // 3. Finanzieller Rahmen / Kaufpreis (max 15 Pkt)
-  // Exaktes Matching der Funnel-Antworten (synced mit funnel.html)
   if (fa.kaufpreis) {
     const kaufpreisMap: Record<string, number> = {
-      'Bis 150.000 €': 8,
-      '150.000 € – 300.000 €': 12,
-      '300.000 € – 500.000 €': 15,
-      'Über 500.000 €': 15,
+      'Bis 150.000 \u20AC': 8,
+      '150.000 \u20AC \u2013 300.000 \u20AC': 12,
+      '300.000 \u20AC \u2013 500.000 \u20AC': 15,
+      '\u00DCber 500.000 \u20AC': 15,
     };
-    rawScore += kaufpreisMap[fa.kaufpreis] || 8;
+    rawScore += findInMap(fa.kaufpreis, kaufpreisMap, 8);
   }
 
   // 4. Eigenmittel (max 40 Pkt — WICHTIGSTE FRAGE)
-  // Exaktes Matching der Funnel-Antworten (synced mit funnel.html)
   if (fa.eigenmittel) {
     const eigenmittelMap: Record<string, number> = {
-      'Unter 10.000 €': 5,
-      '10.000 – 30.000 €': 20,
-      '30.000 – 50.000 €': 35,
-      'Über 50.000 €': 40,
+      'Unter 10.000 \u20AC': 5,
+      '10.000 \u2013 30.000 \u20AC': 20,
+      '30.000 \u2013 50.000 \u20AC': 35,
+      '\u00DCber 50.000 \u20AC': 40,
     };
-    rawScore += eigenmittelMap[fa.eigenmittel] || 5;
+    rawScore += findInMap(fa.eigenmittel, eigenmittelMap, 5);
   }
 
   // 5. Netto-Haushaltseinkommen (max 20 Pkt)
-  // Exaktes Matching der Funnel-Antworten (synced mit funnel.html)
   if (fa.einkommen) {
     const einkommenMap: Record<string, number> = {
-      'Unter 2.500 €': 6,
-      '2.500 € – 4.000 €': 13,
-      '4.000 € – 6.000 €': 18,
-      'Über 6.000 €': 20,
+      'Unter 2.500 \u20AC': 6,
+      '2.500 \u20AC \u2013 4.000 \u20AC': 13,
+      '4.000 \u20AC \u2013 6.000 \u20AC': 18,
+      '\u00DCber 6.000 \u20AC': 20,
     };
-    rawScore += einkommenMap[fa.einkommen] || 6;
+    rawScore += findInMap(fa.einkommen, einkommenMap, 6);
   }
 
   // 6. Berufliche Situation (max 20 Pkt)
