@@ -43,57 +43,30 @@ function calculateScoreFromFunnelAnswers(funnelAnswers: any): { score: number; t
 
   // 3. Finanzieller Rahmen / Kaufpreis (max 15 Pkt)
   if (fa.kaufpreis) {
-    const kp = fa.kaufpreis.replace(/[^0-9.]/g, '');
-    const num = parseFloat(kp);
-    if (!isNaN(num)) {
-      if (num > 500000) rawScore += 15;
-      else if (num > 300000) rawScore += 15;
-      else if (num > 150000) rawScore += 12;
-      else rawScore += 8;
-    } else {
-      // Text-basierte Zuordnung
-      const text = fa.kaufpreis.toLowerCase();
-      if (text.includes('500') || text.includes('über 500')) rawScore += 15;
-      else if (text.includes('300')) rawScore += 15;
-      else if (text.includes('150')) rawScore += 12;
-      else rawScore += 8;
-    }
+    // Text-basierte Zuordnung (sicherer als Zahlen-Parsing wegen dt. Formatierung)
+    const text = fa.kaufpreis.toLowerCase();
+    if (text.includes('500') || text.includes('über 500')) rawScore += 15;
+    else if (text.includes('300')) rawScore += 15;
+    else if (text.includes('150')) rawScore += 12;
+    else rawScore += 8;
   }
 
   // 4. Eigenmittel (max 40 Pkt, korrigiert von 25 — WICHTIGSTE FRAGE)
   if (fa.eigenmittel) {
-    const em = fa.eigenmittel.replace(/[^0-9.]/g, '');
-    const num = parseFloat(em);
-    if (!isNaN(num)) {
-      if (num > 50000) rawScore += 40;
-      else if (num > 30000) rawScore += 35;
-      else if (num > 10000) rawScore += 20;
-      else rawScore += 5;
-    } else {
-      const text = fa.eigenmittel.toLowerCase();
-      if (text.includes('50') || text.includes('über 50')) rawScore += 40;
-      else if (text.includes('30')) rawScore += 35;
-      else if (text.includes('10')) rawScore += 20;
-      else rawScore += 5;
-    }
+    const text = fa.eigenmittel.toLowerCase();
+    if (text.includes('über 50') || text.includes('50.000')) rawScore += 40;
+    else if (text.includes('30') || text.includes('30.000')) rawScore += 35;
+    else if (text.includes('10') || text.includes('10.000')) rawScore += 20;
+    else rawScore += 5;
   }
 
   // 5. Netto-Haushaltseinkommen (max 20 Pkt)
   if (fa.einkommen) {
-    const ek = fa.einkommen.replace(/[^0-9.]/g, '');
-    const num = parseFloat(ek);
-    if (!isNaN(num)) {
-      if (num > 6000) rawScore += 20;
-      else if (num > 4000) rawScore += 18;
-      else if (num > 2500) rawScore += 13;
-      else rawScore += 6;
-    } else {
-      const text = fa.einkommen.toLowerCase();
-      if (text.includes('6') || text.includes('über 6')) rawScore += 20;
-      else if (text.includes('4')) rawScore += 18;
-      else if (text.includes('2.5') || text.includes('2500')) rawScore += 13;
-      else rawScore += 6;
-    }
+    const text = fa.einkommen.toLowerCase();
+    if (text.includes('über 6') || text.includes('6.000')) rawScore += 20;
+    else if (text.includes('4.000') || text.includes('4000')) rawScore += 18;
+    else if (text.includes('2.500') || text.includes('2500')) rawScore += 13;
+    else rawScore += 6;
   }
 
   // 6. Berufliche Situation (max 20 Pkt)
