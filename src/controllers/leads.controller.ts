@@ -42,31 +42,39 @@ function calculateScoreFromFunnelAnswers(funnelAnswers: any): { score: number; t
   }
 
   // 3. Finanzieller Rahmen / Kaufpreis (max 15 Pkt)
+  // Exaktes Matching der Funnel-Antworten (synced mit funnel.html)
   if (fa.kaufpreis) {
-    // Text-basierte Zuordnung (sicherer als Zahlen-Parsing wegen dt. Formatierung)
-    const text = fa.kaufpreis.toLowerCase();
-    if (text.includes('500') || text.includes('über 500')) rawScore += 15;
-    else if (text.includes('300')) rawScore += 15;
-    else if (text.includes('150')) rawScore += 12;
-    else rawScore += 8;
+    const kaufpreisMap: Record<string, number> = {
+      'Bis 150.000 €': 8,
+      '150.000 € – 300.000 €': 12,
+      '300.000 € – 500.000 €': 15,
+      'Über 500.000 €': 15,
+    };
+    rawScore += kaufpreisMap[fa.kaufpreis] || 8;
   }
 
-  // 4. Eigenmittel (max 40 Pkt, korrigiert von 25 — WICHTIGSTE FRAGE)
+  // 4. Eigenmittel (max 40 Pkt — WICHTIGSTE FRAGE)
+  // Exaktes Matching der Funnel-Antworten (synced mit funnel.html)
   if (fa.eigenmittel) {
-    const text = fa.eigenmittel.toLowerCase();
-    if (text.includes('über 50') || text.includes('50.000')) rawScore += 40;
-    else if (text.includes('30') || text.includes('30.000')) rawScore += 35;
-    else if (text.includes('10') || text.includes('10.000')) rawScore += 20;
-    else rawScore += 5;
+    const eigenmittelMap: Record<string, number> = {
+      'Unter 10.000 €': 5,
+      '10.000 – 30.000 €': 20,
+      '30.000 – 50.000 €': 35,
+      'Über 50.000 €': 40,
+    };
+    rawScore += eigenmittelMap[fa.eigenmittel] || 5;
   }
 
   // 5. Netto-Haushaltseinkommen (max 20 Pkt)
+  // Exaktes Matching der Funnel-Antworten (synced mit funnel.html)
   if (fa.einkommen) {
-    const text = fa.einkommen.toLowerCase();
-    if (text.includes('über 6') || text.includes('6.000')) rawScore += 20;
-    else if (text.includes('4.000') || text.includes('4000')) rawScore += 18;
-    else if (text.includes('2.500') || text.includes('2500')) rawScore += 13;
-    else rawScore += 6;
+    const einkommenMap: Record<string, number> = {
+      'Unter 2.500 €': 6,
+      '2.500 € – 4.000 €': 13,
+      '4.000 € – 6.000 €': 18,
+      'Über 6.000 €': 20,
+    };
+    rawScore += einkommenMap[fa.einkommen] || 6;
   }
 
   // 6. Berufliche Situation (max 20 Pkt)
